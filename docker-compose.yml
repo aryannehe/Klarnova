@@ -1,0 +1,74 @@
+# Klarnova — local development stack (KLR-A2)
+# Core: postgres + redis + backend. AI services run under the `ai` profile.
+
+name: klarnova
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: klarnova
+      POSTGRES_PASSWORD: klarnova
+      POSTGRES_DB: klarnova
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U klarnova -d klarnova"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://klarnova:klarnova@postgres:5432/klarnova
+      REDIS_URL: redis://redis:6379/0
+      ENV: development
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+
+  chromadb:
+    image: chromadb/chroma:0.5.23
+    profiles: ["ai"]
+    ports:
+      - "8001:8000"
+    volumes:
+      - chromadata:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ai"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollamadata:/root/.ollama
+
+volumes:
+  pgdata:
+  chromadata:
+  ollamadata:

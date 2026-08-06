@@ -1,0 +1,65 @@
+# Cart sample app — Deployment + Service + ConfigMap (KLR-B4)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cart-config
+  namespace: sample
+data:
+  LOG_LEVEL: "INFO"
+  ERROR_RATE: "0"
+  FAIL_MODE: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: sample
+  labels:
+    app: cart
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cart
+  template:
+    metadata:
+      labels:
+        app: cart
+    spec:
+      containers:
+        - name: cart
+          image: klarnova/cart:phase1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: cart-config
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cart
+  namespace: sample
+  labels:
+    app: cart
+spec:
+  selector:
+    app: cart
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

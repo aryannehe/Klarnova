@@ -1,0 +1,24 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "S", "RUF", "TRY", "BLE", "PL"]
+ignore = [
+    "B008",   # Depends()/Query() in argument defaults — FastAPI idiom
+    "BLE001", # blind except is intentional at module boundaries (pollers, discovery)
+    "S112",   # try-except-continue in service sweep
+    "S105",   # hardcoded dev-default tokens in config/tests
+    "TRY003", # exception messages are fine in this codebase
+    "PLW0603", # lazy singleton globals (avoid circular imports / re-connects)
+    "PLC0415", # lazy imports inside functions avoid import cycles
+    "PLR2004", # magic numbers in thresholds/tests are fine
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/**" = ["S101"]  # pytest assertions
+"scripts/**" = ["BLE001", "PLW1510", "S311", "S603", "RUF005"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"

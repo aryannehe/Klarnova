@@ -1,0 +1,18 @@
+# ServiceMonitor — scrape the sample apps into Prometheus (KLR-B2/B4)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: klarnova-sample-apps
+  namespace: sample
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [checkout, inventory, cart]
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

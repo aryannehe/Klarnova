@@ -204,7 +204,7 @@ Orchestration (Kind/Minikube dev, managed cloud final)
 
 Helm
 
-3.21.x
+4.2.x
 
 Packaging & deployment
 
