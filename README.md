@@ -1,5 +1,6 @@
 # Klarnova
 
-Piyush: The GOAT
+Aryan
+Piyush
 Shravani
 Gayatri
