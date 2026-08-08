@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.approval import router as approval_router
 from .api.auth import router as auth_router
+from .api.config import router as config_router
 from .api.incidents import router as incidents_router
 from .api.kubernetes import router as k8s_router
 from .api.webhooks import router as webhooks_router
@@ -70,6 +71,7 @@ app.include_router(webhooks_router, prefix=f"{settings.API_V1_STR}/webhooks", ta
 app.include_router(approval_router, prefix=f"{settings.API_V1_STR}/actions", tags=["actions"])
 app.include_router(incidents_router, prefix=f"{settings.API_V1_STR}/incidents", tags=["incidents"])
 app.include_router(auth_router, prefix=f"{settings.API_V1_STR}/auth", tags=["auth"])
+app.include_router(config_router, prefix=f"{settings.API_V1_STR}/config", tags=["config"])
 
 @app.get("/health")
 async def health_check():

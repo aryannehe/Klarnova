@@ -12,13 +12,11 @@ from dotenv import load_dotenv
 
 load_dotenv(BACKEND_DIR / ".env")
 
-from sqlalchemy import select
-
+import yaml
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.domain import KnowledgeDoc, Policy, User
-import yaml
-
+from sqlalchemy import select
 
 SEV_BY_KEY = {
     "sev_1": "SEV-1",
@@ -64,18 +62,25 @@ SAMPLE_KB_DOCS = [
 
 async def main() -> None:
     async with SessionLocal() as session:
-        existing = (await session.execute(select(User).where(User.username == "admin"))).scalar_one_or_none()
-        if existing is None:
-            session.add(
-                User(
-                    username="admin",
-                    hashed_password=hash_password("admin-password"),
-                    role="Admin",
+        for username, role, password in (
+            ("admin", "Admin", "admin123"),
+            ("engineer", "Engineer", "engineer123"),
+            ("viewer", "Viewer", "viewer123"),
+        ):
+            existing = (
+                await session.execute(select(User).where(User.username == username))
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(
+                    User(
+                        username=username,
+                        hashed_password=hash_password(password),
+                        role=role,
+                    )
                 )
-            )
-            print("Seeded admin user (admin / admin-password)")
-        else:
-            print("Admin user already exists")
+                print(f"Seeded {role.lower()} user ({username} / {password})")
+            else:
+                print(f"{role} user already exists")
 
         rules = load_policy_rules()
         for rule in rules:

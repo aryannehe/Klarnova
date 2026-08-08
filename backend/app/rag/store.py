@@ -76,6 +76,16 @@ class VectorStore:
         )
         return results
 
+    def counts(self) -> dict[str, int]:
+        """Per-collection document counts; empty dict when the store is degraded."""
+        if not self._loaded:
+            return {}
+        try:
+            return {name: self.collections[name].count() for name in COLLECTIONS}
+        except Exception as exc:
+            logger.warning("Chroma counts unavailable: %s", exc)
+            return {}
+
     def query_text(
         self,
         query_text: str,

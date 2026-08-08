@@ -35,7 +35,8 @@ class Decision:
 
 
 @lru_cache(maxsize=1)
-def load_rules(path: str = RULES_PATH) -> dict:
+def load_rules(path: str | None = None) -> dict:
+    path = path or RULES_PATH
     with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
 

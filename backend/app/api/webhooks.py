@@ -15,6 +15,8 @@ from app.bandit.learning import record_learning
 from app.config import settings
 from app.core.database import SessionLocal
 from app.models.domain import AgentRun, AuditLog, Incident, Remediation
+from app.rag.writeback import writeback_incident
+from app.services.notify import notify
 
 router = APIRouter()
 
@@ -186,6 +188,13 @@ async def _persist_results(incident_id: int, state: dict[str, Any], labels: dict
 
     await record_learning(state)
 
+    if state.get("is_resolved") or state.get("escalated"):
+        await writeback_incident(incident_id, state, labels)
+    if state.get("escalated"):
+        await notify("escalated", state, labels)
+    elif state.get("is_resolved"):
+        await notify("resolved", state, labels)
+
 
 async def _create_incident(alert: dict[str, Any]) -> int | None:
     labels = alert.get("labels", {})
@@ -230,6 +239,8 @@ async def process_alert(alert: dict[str, Any]):
         return
     labels = alert.get("labels", {})
     state = build_state(incident_id, alert)
+    if state.get("severity") in ("SEV-1", "SEV-2"):
+        await notify("alert", state, labels)
     try:
         s1 = await asyncio.to_thread(investigation_graph.invoke, state)
         if s1.get("is_safe") and not s1.get("requires_approval"):

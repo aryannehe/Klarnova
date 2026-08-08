@@ -2,12 +2,14 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from app.agents.graph import build_remediation_graph
 from app.api.webhooks import MAX_RETRIES, _persist_results
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, get_db
 from app.core.rbac import require_roles
 from app.models.domain import AuditLog, Incident
+from app.services.notify import notify
 
 router = APIRouter()
 remediation_graph = build_remediation_graph()
@@ -19,6 +21,48 @@ class ApprovalRequest(BaseModel):
     approved: bool
     target_resource: str | None = None
     namespace: str | None = None
+
+
+@router.get("/pending")
+async def pending_approvals(
+    db=Depends(get_db),
+    _: dict = Depends(require_roles("admin", "engineer", "viewer")),
+):
+    """Incidents currently awaiting operator approval, with their candidate action."""
+    incidents = (
+        await db.execute(
+            select(Incident)
+            .where(Incident.status == "Awaiting Approval")
+            .order_by(Incident.detected_at.desc())
+        )
+    ).scalars().all()
+
+    queue = []
+    for incident in incidents:
+        snapshot = incident.state_snapshot or {}
+        selected = snapshot.get("selected_action") or {}
+        queue.append(
+            {
+                "incident_id": incident.id,
+                "alert_name": incident.alert_name,
+                "severity": incident.severity,
+                "priority": incident.priority,
+                "status": incident.status,
+                "namespace": incident.namespace,
+                "resource_kind": incident.resource_kind,
+                "resource_name": incident.resource_name,
+                "root_cause": incident.root_cause,
+                "confidence_score": incident.confidence_score,
+                "detected_at": incident.detected_at,
+                "selected_action": {
+                    "action_type": selected.get("action_type"),
+                    "target_resource": selected.get("target_resource"),
+                    "namespace": selected.get("namespace"),
+                    "source": selected.get("source", "agent"),
+                },
+            }
+        )
+    return {"pending": queue}
 
 
 @router.post("/approve")
@@ -58,6 +102,7 @@ async def approve_action(
                 )
             )
             await session.commit()
+        await notify("rejected", snapshot, incident.labels or {})
         return {"status": "success", "action": request.action_type, "approved": False}
 
     snapshot["approval_status"] = "approved"
