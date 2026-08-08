@@ -1,4 +1,4 @@
-﻿# Klarnova_Technical_Architecture
+# Klarnova_Technical_Architecture
 
 KLARNOVA
 
@@ -54,7 +54,7 @@ Role
 
 Node.js
 
-24.x LTS
+22.19.0 (diverges from 24.x LTS, but is stable for Next 16)
 
 Runtime for the frontend build toolchain
 
@@ -172,9 +172,9 @@ Local LLM path (cost/rate-limit fallback)
 
 sentence-transformers
 
-3.x / 4.x
+5.6.1
 
-Embeddings (all-MiniLM-L6-v2)
+Embeddings (bge-small-en-v1.5)
 
 ChromaDB
 
@@ -204,7 +204,7 @@ Orchestration (Kind/Minikube dev, managed cloud final)
 
 Helm
 
-3.21.x
+4.2.3
 
 Packaging & deployment
 
@@ -292,7 +292,7 @@ runbooks, historical_incidents, kubernetes_docs (separated so retrieval can weig
 
 Embedding model
 
-all-MiniLM-L6-v2 (384-dim) via sentence-transformers
+bge-small-en-v1.5 (384-dim) via sentence-transformers
 
 Metadata per chunk
 

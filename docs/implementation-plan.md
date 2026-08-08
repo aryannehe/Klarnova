@@ -1,116 +1,82 @@
-# Klarnova — Implementation Plan
+# Klarnova Implementation Plan v2
 
-Six-month, phase-by-phase execution schedule derived from the feature backlog
-(`Klarnova_Feature_Backlog_1.md`). Maps Epics A–I to weekly goals, milestones, and exit criteria.
+The objective is to implement Klarnova, a Plug-and-Play, AI-Powered AIOps Platform for Kubernetes. This plan has been reconciled against the PRD, Security, and Technical Architecture documents, as well as the actual state of the repository.
 
-Final Year BE Project · Version 1.0 · 2026
+## Locked Decisions & Environment Constraints
+- **Cluster**: Minikube (docker driver, K8s v1.34.1). *Note: Docker Desktop is currently stopped and needs to be restarted.*
+- **Chaos Target**: Sock Shop (14 pods) — already deployed.
+- **Backend Placement**: Kubernetes Deployment in-cluster.
+- **Loki**: Deferred — use K8s API logs (`--previous`) to save memory.
+- **LLM**: Ollama with `llama3.2:3b` (OpenAI/Gemini switchable via `.env`) — already running.
+- **RAG**: ChromaDB in-process + `BAAI/bge-small-en-v1.5` — already working and persisted.
+- **Database**: pgvector Postgres 15.4, `klarnova` DB — already created.
+- **Repo State**: The directory structure and all `.py` files exist but are **empty** (0 bytes). We are filling the skeletons, not creating them.
 
----
+### Version Reconciliations
+- **Node**: Keep v22.19.0 (diverges from TAD's 24.x LTS, but is stable for Next 16).
+- **Helm**: Keep v4.2.3 (diverges from TAD's 3.21.x, syntax is compatible).
+- **Sentence-Transformers**: Keep v5.6.1 (newer than TAD's 3/4.x).
+- **Embedding Model**: Keep `bge-small-en-v1.5` (already downloaded & verified, diverges from TAD).
+- **KB Scheduler**: Use **asyncio task** instead of Celery worker to avoid Windows multiprocessing traps.
 
-## 1. Assumptions & Conventions
+## Pre-flight (P0, do first)
+- **Start Docker Desktop**: Wait for minikube Ready → re-verify monitoring + Sock Shop 14/14.
+- **Dependencies**: `pip install python-jose ruff` into `backend/.venv`.
+- **Make**: Install GNU Make (`winget install GnuWin32.Make`).
+- **Security**: Create `.gitignore` to protect `.env`, `.venv/`, `data/`, `node_modules/`, `*.kubeconfig`, `chaos-testing/results/`.
+- **Frontend**: Run `npx shadcn@latest init` + `npm i recharts`.
+- **Alertmanager**: Patch `kube-prometheus-stack-values.yaml` to route to `http://klarnova-backend.<ns>.svc:8000/v1/webhooks/alertmanager` with `ALERTMANAGER_WEBHOOK_TOKEN` header.
 
-- **Kickoff:** Month 1, Week 1 = the first Monday after the plan is accepted (adjust all dates
-  below if kickoff moves). Example dates below assume kickoff **Mon 10 Aug 2026**.
-- **Work in pairs per epic, rotate weekly** so knowledge spreads before the viva (backlog rhythm).
-- **One integration owner per week** — everything merged that week must run end-to-end.
-- **Freeze contracts before parallelising:** `AgentState` (KLR-A3) and Pydantic schemas (KLR-A4)
-  are frozen in Month 1 before anyone builds against them.
-- **Exit criteria are gates:** a phase is not done until its criteria are met.
+## Phase A — Foundations & Contracts (KLR-A1–A9)
+- **Contracts**: Freeze `agents/state.py` (LangGraph 1.x TypedDict + Annotated reducers) and schemas (incident must include `created_at` → `detected_at` → `remediated_at` for MTTD/MTTR ablation studies, diagnosis, remediation, agent, auth).
+- **Backend Skeleton**: Fill `app/config.py` → `app/main.py` (FastAPI, CORS for `:3000`, `/health`, `/ready`) → `app/core/database.py` (async SQLAlchemy). Fill `app/models/*` (8 ORM tables) + first Alembic migration.
+- **Tooling**: Fill `Makefile` (setup/dev/test/lint/seed/demo/deploy) and `docker-compose.yml`.
+- **Frontend Skeleton**: Wire default Next page to backend `/health`.
 
----
+## Phase B — Cluster, Monitoring, Sample (KLR-B1–B7)
+- **Verify**: Cluster + `kube-prometheus-stack` + Sock Shop.
+- **RBAC**: Build `k8s/rbac/` ServiceAccount + least-privilege ClusterRole (pods get/list/watch/delete, deployments get/list/watch/patch, nodes get/list/watch/patch (cordon), events get/list/watch, pods/log).
+- **Scripts**: Build `scripts/inject-failure.sh` + `setup.sh`.
 
-## 2. Milestone Map
+## Phase C — Ingestion & Detection (KLR-C1–C7)
+- **K8s Client**: Fill `k8s/client.py` and `k8s/metrics.py` (PromQL: up, unavailable replicas, restart counters).
+- **Auto-Discovery**: `discovery/discovery.py` detects K8s API + Prometheus.
+- **Webhook Integration**: `api/v1/endpoints/webhooks.py` token-protected Alertmanager receiver.
+- **Detection & Classification**: `agents/monitoring.py` + `agents/graph.py` (Monitoring → decision); severity classification SEV-1…4/P1…4.
 
-| Phase | Month | Epic(s) | Milestone / exit criteria |
-|---|---|---|---|
-| 0 | 1 | A, B (start) | Local stack boots with one command; schemas frozen; skeleton frontend↔backend round-trip |
-| 1 | 2 | B (finish), C | Real failure → alert → webhook → severity-classified incident record (no AI) |
-| 2 | 3 | D, E (start) | Incident → structured investigation + retrieved relevant precedent (review-2 demo) |
-| 3 | 4 | E (finish), F | Full closed loop: detect → diagnose → auto-remediate low-risk / escalate high-risk → validate → report |
-| 4 | 5 | G, H (start) | Operator login, live incidents, agent traces, approval workflow with RBAC |
-| 5 | 6 | H (finish), I | Documented evaluation (baseline + ablation), hardened failure paths, repeatable demo |
+## Phase D — Investigation & RAG (KLR-D1–D8)
+- **Data Collection**: Fill `k8s/logs.py` (`--previous`) and `k8s/events.py`.
+- **Investigation Agent**: `agents/investigation.py` (rule-match first, Ollama fallback).
+- **Knowledge Base & RAG**: `rag/chroma_client.py`, `rag/embeddings.py`, `rag/ingest.py`, `rag/retriever.py`.
+- **Seeding**: Fill `knowledge-base/sources.yaml` + `seed.py` (30–50 runbooks mapped to chaos scenarios + historical incidents for bandit warm-start).
+- **Live-refresh**: Scheduled asyncio task with content-hash diff.
 
----
+## Phase E — Reasoning, Planning, Bandit (KLR-E1–E8)
+- **LLM Client**: `E1` abstraction layer (Ollama default, OpenAI/Gemini drop-in).
+- **Agents**: `E2` Root Cause (cause + confidence), `E3` versioned prompt templates, `E4` Planning (ranked candidates).
+- **Bandit**: `E5–E7` MABWiser 2.7.4. Policy in `bandit_policy` table. Reward = Validation outcome + MTTR delta. Seed priors from runbooks.
+- **Safety Gate**: `E8` confidence gate (below threshold → human regardless of risk tier).
 
-## 3. Month-by-Month Schedule
+## Phase F — Safety, Remediation, Validation (KLR-F1–F10)
+- **Policy Engine**: `policy/engine.py` + `policy/rules/default.yaml` (action × severity → auto/require_approval). SEV-1 always requires approval.
+- **Remediation Actions**: Fill 5 action modules (restart_pod, scale_deployment, rollback_deployment, delete_pod, cordon_node) → safe-action whitelist only.
+- **Agents**: `safety.py` → `remediation.py` → `validation.py` (re-check pods Ready + Prometheus) → retry-then-escalate.
+- **Reporting & Audit**: `reporting.py` (closes RAG loop). `F10` append-only `audit_log` writer on every agent + human action.
 
-### Month 1 — Phase 0 · Foundations & Contracts (Epic A + B start)
-| Week | Goals (tickets) |
-|---|---|
-| 1 | **KLR-A1** monorepo init, branching model, `CONTRIBUTORS.md`, first commit per teammate · **KLR-A2** docker-compose (backend, frontend, postgres, redis, chromadb, ollama) |
-| 2 | Finish **A2** · **A3** freeze `AgentState` · **A4** freeze Pydantic schemas (contract-freeze gate) |
-| 3 | **A5** FastAPI skeleton + health/readiness + config loader · **A6** Postgres schema + first Alembic migration · start **B1** local cluster (Kind/Minikube) |
-| 4 | **A7** Next.js skeleton `/health` round-trip · **A8** Makefile + `.env.example` · **A9** CI (lint + test) · finish **B1** |
+## Phase G — Dashboard & Auth (KLR-G1–G9)
+- **Security**: `core/security.py` (JWT, bcrypt), `core/rbac.py` (Admin/Engineer/Viewer).
+- **Frontend Views**: Login flow → incident feed (with SEV/P badges) → agent reasoning trace → approval panel → MTTD/MTTR analytics.
 
-**Exit criteria:** cluster-less stack boots with one command; contracts frozen; skeleton frontend talks to skeleton backend.
+## Phase H — Packaging, Cloud, Plugin (KLR-H1–H5)
+- **Dockerization**: Backend Dockerfile (optimize for `torch` size), frontend Dockerfile.
+- **Helm Chart**: `helm/klarnova/` chart.
+- **Validation**: Test the single-command install.
 
-### Month 2 — Phase 1 · Cluster, Monitoring & Ingestion (Epic B finish + C)
-| Week | Goals (tickets) |
-|---|---|
-| 5 | **B2** monitoring stack (`kube-prometheus-stack`) · **B3** three breakable sample microservices with structured JSON logging |
-| 6 | **B4** deploy sample apps (manifests + configmap) · **B5** ServiceAccount + scoped ClusterRole + binding |
-| 7 | **B6** Alertmanager routing to placeholder webhook · **C1** K8s client wrapper · **C2** Prometheus query wrapper |
-| 8 | **B7** failure-injection scripts (crash, OOM, bad deploy, image-pull, CPU) · **C3** Auto-Discovery module · **C4** token-protected webhook receiver → incident record |
-| 9 | **C5** Monitoring/Ingestion Agent (poll metrics + API) · **C6** detection decision + SEV-1…4 / P1…4 classification · **C7** minimal LangGraph wiring |
+## Phase I — Evaluation & Hardening (KLR-I1–I7)
+- **Chaos Testing**: `chaos-testing/run_experiments.py` and `ablation.py`.
+- **Hardening**: Ensure graceful degradation during LLM/vector-DB/K8s/DB/Prometheus outages.
+- **Demo**: `scripts/demo.sh` + `reset.sh`.
 
-**Exit criteria:** trigger a real failure → alert fires → webhook lands → severity-classified incident record created. **No AI yet.**
-
-### Month 3 — Phase 2 · Investigation & RAG (Epic D + E start)
-| Week | Goals (tickets) |
-|---|---|
-| 10 | **D1** K8s data collectors (events, pod status, logs incl. `--previous`, deploy history) · start **D2** Investigation Agent (rule-based first) |
-| 11 | **D3** embedding pipeline (all-MiniLM-L6-v2) · **D4** ChromaDB client + 3 collections |
-| 12 | **D5** KB ingestion script + `sources.yaml` · **E1** LLM client (OpenAI ↔ Ollama toggle + rate limiting) |
-| 13 | **D6** scheduled live-refresh (content-hash diff, Redis-backed) · **D7** curate 30–50 runbooks |
-| 14 | **D8** Retrieval Agent (semantic top-k + threshold) · finish **D2** (LLM fallback path) |
-
-**Exit criteria:** incident produces structured investigation + retrieved relevant precedent. Strong standalone review-2 demo.
-
-### Month 4 — Phase 3 · Reasoning, Safety & Closed Loop (Epic E finish + F)
-| Week | Goals (tickets) |
-|---|---|
-| 15 | **E2** Root Cause Agent (cause + confidence) · **E3** versioned prompt templates |
-| 16 | **E4** Planning Agent (ranked candidate actions) · **E8** confidence-threshold gate |
-| 17 | **F1** policy engine + `default.yaml` (action × severity) · **F2** Safety Agent · **E5–E7** bandit (P2, seed priors) |
-| 18 | **F3** whitelist actions (restart, scale, rollback, delete, cordon) · **F4** Remediation Agent |
-| 19 | **F5** Validation Agent (re-check live health) · **F6** bounded retry-then-escalate loop |
-| 20 | **F7** Reporting Agent · **F8** write resolved incident back to KB · **F10** audit-log writer · **F9** notifications (P2, if on track) |
-
-**Exit criteria:** full closed loop — inject failure → detect → diagnose → auto-remediate a low-risk case → validate → report; high-risk case escalates for approval.
-
-### Month 5 — Phase 4 · Dashboard & Auth (Epic G + H start)
-| Week | Goals (tickets) |
-|---|---|
-| 21 | **G1** JWT auth backend (bcrypt) · **G2** RBAC enforcement (Admin/Engineer/Viewer) |
-| 22 | **G3** login page + auth flow · **G4** incident feed + detail with severity badges |
-| 23 | **G5** agent-reasoning trace view · **G6** approval panel (high-risk actions) |
-| 24 | **G7** MTTD/MTTR analytics (Recharts, P2) · **G8** SSE live updates (P2) · **H2** Dockerfiles |
-
-**Exit criteria:** operator can log in, watch incidents live, inspect agent reasoning, and approve/reject actions — with role-appropriate access.
-
-### Month 6 — Phase 5 · Packaging & Evaluation (Epic H finish + I)
-| Week | Goals (tickets) |
-|---|---|
-| 25 | **H1** Helm chart · **H3** one-command install validation on the local cluster |
-| 26 | **I1** chaos-test harness (log MTTD/MTTR/success/escalation) · **I2** baseline runs (manual + threshold-only) |
-| 27 | **I3** ablation study (RAG/Validation/Safety/Planning/bandit) · **I4** error-handling hardening · **I5** input-safety hardening |
-| 28 | **I6** results analysis + honest write-up · **I7** demo + reset scripts · slack: **H4** cloud deploy (P2), **H5** kubectl plugin (P3), **G9** admin views (P3) |
-
-**Exit criteria:** documented evaluation with baseline comparison + ablation; hardened failure paths; repeatable clean demo.
-
----
-
-## 4. Risk & Contingency
-
-- **Cut-first order if Month 6 is tight** (backlog priority rollup): H5 plugin → G9 admin views →
-  E5–E7 bandit → G7/G8 analytics+SSE → H4 cloud deploy → F9 notifications.
-- **Never cut:** the closed loop (C–F core), auth/RBAC (G1–G2), evaluation (I1, I3, I6).
-- **Blocked ticket rule:** a ticket blocked > 1 day is a standup topic; keep the `blocked` column honest.
-- **Version discipline:** pin all dependency versions at kickoff and hold them fixed (reproducibility).
-
----
-
-## 5. Phase Handoffs
-
-Each phase ends with a working demo of its exit criteria, an updated backlog status, and a
-knowledge-sharing session (every teammate can explain that phase's design before the next phase starts).
+## Verification Plan (DoD per phase)
+- **Automated**: `ruff check` + `pytest` + `tsc --noEmit`.
+- **End-to-End**: Inject failure in Sock Shop → alert → webhook → classified incident → investigate → RAG → root cause → plan → safety gate → auto-remediate (low risk) or approve (high/SEV-1) → validate → report → KB write-back.
