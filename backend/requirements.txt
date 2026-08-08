@@ -36,6 +36,7 @@ python-dotenv>=1.0
 psutil>=5.9
 python-jose>=3.3
 bcrypt>=4.0
+PyYAML>=6.0
 
 # Dev / test
 pytest>=8.0
