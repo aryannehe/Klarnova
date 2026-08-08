@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     JWT_EXPIRY: int = 3600
     ALGORITHM: str = "HS256"
 
+    # Notifications (Epic F9, Slack webhook)
+    SLACK_WEBHOOK_URL: str = ""
+    SLACK_CHANNEL: str = ""
+
     # CORS
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000"]
     

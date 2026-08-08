@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""kubectl-klarnova — a kubectl plugin for Klarnova incident response.
+
+Zero dependencies (Python 3.8+ standard library only). Talks to the Klarnova
+backend REST API.
+
+Install (kubectl discovers plugins named ``kubectl-<name>`` on PATH):
+
+    chmod +x cli/kubectl-klarnova
+    export PATH="$PWD/cli:$PATH"
+    kubectl klarnova login          # one-time auth (token cached in ~/.klarnova)
+    kubectl klarnova status
+    kubectl klarnova incidents list
+    kubectl klarnova incidents show 17
+    kubectl klarnova incidents approve 17
+    kubectl klarnova incidents reject 17
+
+Windows: run ``python cli/kubectl-klarnova <args>``.
+"""
+import argparse
+import getpass
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+CONFIG_FILE = Path.home() / ".klarnova"
+DEFAULT_API_BASE = "http://localhost:8000"
+
+
+class CliError(Exception):
+    pass
+
+
+def _api_base() -> str:
+    base = os.environ.get("KLR_API")
+    if not base and CONFIG_FILE.exists():
+        try:
+            base = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("api_base")
+        except (OSError, ValueError):
+            pass
+    return base or DEFAULT_API_BASE
+
+
+def _token() -> str | None:
+    token = os.environ.get("KLR_TOKEN")
+    if token:
+        return token
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("token")
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def _save(token: str) -> None:
+    data = {"api_base": _api_base(), "token": token}
+    CONFIG_FILE.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _request(method: str, path: str, token: str | None = None, body=None, form=None):
+    url = f"{_api_base()}{path}"
+    headers = {"Accept": "application/json"}
+    data = None
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req) as resp:  # noqa: S310 (host is user-configured)
+            raw = resp.read()
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(detail).get("detail", detail)
+        except ValueError:
+            pass
+        raise CliError(f"HTTP {exc.code}: {detail}") from None
+    except urllib.error.URLError as exc:
+        raise CliError(f"cannot reach {_api_base()}: {exc.reason}") from None
+
+
+def _require_token() -> str:
+    token = _token()
+    if not token:
+        raise CliError("not logged in - run 'kubectl klarnova login' (or set KLR_TOKEN)")
+    return token
+
+
+def cmd_login(args) -> int:
+    username = args.username or input("Username: ")
+    password = args.password or getpass.getpass("Password: ")
+    result = _request("POST", "/v1/auth/login", form={"username": username, "password": password})
+    _save(result["access_token"])
+    print(f"Logged in; token cached in {CONFIG_FILE}")
+    return 0
+
+
+def cmd_status(args) -> int:
+    _request("GET", "/health")  # fail loudly if unreachable
+    stats = _request("GET", "/v1/incidents/stats", token=_require_token())
+    print(f"total incidents: {stats['total']}")
+    print(f"resolved: {stats['resolved']}  escalated: {stats['escalated']}  open: {stats['open']}")
+    print(f"resolved rate: {stats['resolved_rate']:.1%}")
+    for sev, count in sorted(stats.get("by_severity", {}).items(), reverse=True):
+        print(f"  {sev}: {count}")
+    return 0
+
+
+def cmd_list(args) -> int:
+    params = urllib.parse.urlencode(
+        {k: v for k, v in (("status", args.status), ("limit", args.limit)) if v}
+    )
+    incidents = _request("GET", f"/v1/incidents?{params}", token=_require_token())
+    if not incidents:
+        print("no incidents")
+        return 0
+    for inc in incidents:
+        print(
+            f"#{inc['id']:<4} {inc['status']:<18} {inc['severity']:<6} "
+            f"{inc['resource_kind']}/{inc['resource_name']}  {inc['alert_name']}"
+        )
+    return 0
+
+
+def _selected_action(incident_id: str) -> dict:
+    trace = _request("GET", f"/v1/incidents/{incident_id}/trace", token=_require_token())
+    return trace.get("selected_action") or {}
+
+
+def cmd_show(args) -> int:
+    trace = _request("GET", f"/v1/incidents/{args.incident_id}/trace", token=_require_token())
+    inc = trace["incident"]
+    print(f"#{inc['id']} {inc['alert_name']} — {inc['status']} ({inc['severity']}/{inc['priority']})")
+    print(f"  {inc['resource_kind']} {inc['resource_name']} in {inc['namespace']}")
+    if inc.get("root_cause"):
+        print(f"  root cause: {inc['root_cause']} (confidence {inc.get('confidence_score')})")
+    if trace.get("selected_action"):
+        a = trace["selected_action"]
+        print(f"  selected action: {a['action_type']} on {a['target_resource']} (source={a['source']})")
+    print("  agent runs:")
+    for run in trace.get("agent_runs", []):
+        print(f"    - {run['agent']}: {run['status']}")
+    for rem in trace.get("remediations", []):
+        print(f"  remediation: {rem['action']} → {rem['outcome']}")
+    return 0
+
+
+def cmd_approve(args, approved: bool) -> int:
+    action = args.action or _selected_action(args.incident_id).get("action_type")
+    if not action:
+        raise CliError("no action to approve — pass --action")
+    body = {
+        "incident_id": args.incident_id,
+        "action_type": action,
+        "approved": approved,
+    }
+    if args.target:
+        body["target_resource"] = args.target
+    if args.namespace:
+        body["namespace"] = args.namespace
+    result = _request("POST", "/v1/actions/approve", token=_require_token(), body=body)
+    print(f"action {result['action']} approved={result['approved']}")
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="kubectl klarnova",
+        description="Klarnova incident-response kubectl plugin",
+    )
+    parser.add_argument("--api", help="API base URL (default: KLR_API or ~/.klarnova or localhost:8000)")
+    parser.add_argument("--token", help="Bearer token (default: KLR_TOKEN or ~/.klarnova)")
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("login", help="authenticate and cache a token")
+    p.add_argument("--username")
+    p.add_argument("--password")
+
+    sub.add_parser("status", help="incident summary")
+
+    p = sub.add_parser("incidents", help="incident operations")
+    inc = p.add_subparsers(dest="subcommand", required=True)
+    p_list = inc.add_parser("list", help="list incidents")
+    p_list.add_argument("--status")
+    p_list.add_argument("--limit", default=50)
+    p_show = inc.add_parser("show", help="show incident detail")
+    p_show.add_argument("incident_id")
+    p_app = inc.add_parser("approve", help="approve the proposed remediation")
+    p_app.add_argument("incident_id")
+    p_app.add_argument("--action")
+    p_app.add_argument("--target")
+    p_app.add_argument("--namespace")
+    p_rej = inc.add_parser("reject", help="reject the proposed remediation")
+    p_rej.add_argument("incident_id")
+    p_rej.add_argument("--action")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.api:
+        os.environ["KLR_API"] = args.api
+    if args.token:
+        os.environ["KLR_TOKEN"] = args.token
+    try:
+        if args.command == "login":
+            return cmd_login(args)
+        if args.command == "status":
+            return cmd_status(args)
+        if args.command == "incidents":
+            if args.subcommand == "list":
+                return cmd_list(args)
+            if args.subcommand == "show":
+                return cmd_show(args)
+            if args.subcommand == "approve":
+                return cmd_approve(args, True)
+            if args.subcommand == "reject":
+                return cmd_approve(args, False)
+    except CliError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    parser.error("unknown command")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
