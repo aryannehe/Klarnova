@@ -5,10 +5,17 @@ from app.config import settings
 
 class K8sClient:
     def __init__(self):
-        if settings.KUBE_IN_CLUSTER:
-            config.load_incluster_config()
-        else:
-            config.load_kube_config()
+        # Fail-safe: never raise at import time when no cluster or kubeconfig
+        # is reachable (e.g. CI runners). API objects can be constructed
+        # without a loaded config; real calls fail gracefully through the
+        # safe-action wrappers.
+        try:
+            if settings.KUBE_IN_CLUSTER:
+                config.load_incluster_config()
+            else:
+                config.load_kube_config()
+        except Exception:
+            pass
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
         self.custom_objects = client.CustomObjectsApi()

@@ -1,3 +1,4 @@
+from app.ablation import ablation
 from app.agents.state import AgentState
 from app.policy.engine import evaluate
 
@@ -8,6 +9,23 @@ def safety_node(state: AgentState):
     action_type = action.get("action_type", "")
     severity = state.get("severity", "SEV-3")
     confidence = float(state.get("confidence_score", 0.0))
+
+    if ablation.disable_safety:
+        decision_reason = "ablation: safety gate disabled (auto-approve)"
+        return {
+            "is_safe": True,
+            "requires_approval": False,
+            "approval_status": "approved",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        f"Safety: {action_type} at {severity} "
+                        f"(conf={confidence:.2f}) -> auto: {decision_reason}"
+                    ),
+                }
+            ],
+        }
 
     decision = evaluate(action_type, severity, confidence)
 

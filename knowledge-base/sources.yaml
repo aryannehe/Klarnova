@@ -68,6 +68,279 @@ collections:
         Remediation: restart the pod as an interim fix, then address the leak
         (heap dumps, GC settings) before the next restart threshold.
       source: internal
+    - id: runbook-liveness-probe-failing
+      title: Failing liveness probe runbook
+      text: |
+        Symptom: deployment rolled out but pods keep restarting because the
+        liveness probe fails; endpoints show unavailable replicas.
+        Diagnosis: a bad deploy is the usual cause: new image cannot serve
+        traffic, health endpoint changed, or probe timeout too low.
+        Remediation: roll back the deployment to the previous revision, verify
+        the health endpoint with curl from inside the pod, then re-run the
+        rollout with corrected probe settings.
+      source: internal
+    - id: runbook-readiness-probe-failing
+      title: Failing readiness probe runbook
+      text: |
+        Symptom: pods are running but not Ready, so services return 503 and
+        no endpoints are attached.
+        Diagnosis: readiness probe endpoint returns non-2xx; common causes are
+        a not-yet-warm app, a missing dependency, or a probe path typo.
+        Remediation: tail the app logs to find the real failure, fix the
+        dependency or the probe path, then rollout restart the deployment.
+      source: internal
+    - id: runbook-rollout-stuck
+      title: Stuck deployment rollout runbook
+      text: |
+        Symptom: kubectl rollout status hangs and progress deadline exceeded;
+        new pods never become Ready.
+        Diagnosis: the new image fails its probes, or maxUnavailable blocks
+        the update, or the ReplicaSet cannot schedule.
+        Remediation: check rollout status and pod events, roll back with
+        kubectl rollout undo to the previous revision, then investigate the
+        image change separately.
+      source: internal
+    - id: runbook-pod-pending-unschedulable
+      title: Unschedulable pod runbook
+      text: |
+        Symptom: pod stuck in Pending with scheduling failure events.
+        Diagnosis: insufficient CPU/memory, node taints, or resource quotas
+        block placement.
+        Remediation: describe the pod to read the scheduling event, remove the
+        taint or add a toleration, or scale the node pool, then delete the pod
+        so it reschedules.
+      source: internal
+    - id: runbook-pod-pending-insufficient-resources
+      title: Insufficient resources runbook
+      text: |
+        Symptom: pod stays Pending because no node satisfies requested CPU or
+        memory.
+        Diagnosis: node pool is at capacity or requests exceed allocatable.
+        Remediation: scale out the node pool or reduce requests; use the cluster
+        autoscaler if configured, then let the pod schedule.
+      source: internal
+    - id: runbook-createcontainerconfigerror
+      title: CreateContainerConfigError runbook
+      text: |
+        Symptom: container cannot start with CreateContainerConfigError.
+        Diagnosis: referenced secret or configmap is missing, or an env value
+        cannot be resolved at container creation.
+        Remediation: check which config is referenced, create the secret or
+        configmap, then rollout restart the deployment.
+      source: internal
+    - id: runbook-secret-not-found
+      title: Missing secret runbook
+      text: |
+        Symptom: pod fails with secret "<name>" not found.
+        Diagnosis: the secret referenced by envFrom, volume, or imagePullSecrets
+        does not exist in the namespace.
+        Remediation: create the secret from the manifest or from kubectl create
+        secret, then rollout restart; keep secrets out of git.
+      source: internal
+    - id: runbook-configmap-not-found
+      title: Missing configmap runbook
+      text: |
+        Symptom: pod fails with configmap "<name>" not found.
+        Diagnosis: the configmap referenced by env or volume does not exist in
+        the namespace.
+        Remediation: create the configmap with the expected keys, then rollout
+        restart the deployment to pick up the new values.
+      source: internal
+    - id: runbook-image-pull-secret-missing
+      title: ImagePullBackOff from missing pull secret runbook
+      text: |
+        Symptom: pod stuck in ImagePullBackOff against a private registry with
+        authentication errors.
+        Diagnosis: the deployment lacks imagePullSecrets or the secret is stale.
+        Remediation: verify registry credentials, add the imagePullSecrets field
+        to the pod spec, then rollout restart the deployment.
+      source: internal
+    - id: runbook-registry-unreachable
+      title: Registry unreachable runbook
+      text: |
+        Symptom: ImagePullBackOff with network/EOF errors pulling from the
+        registry.
+        Diagnosis: registry DNS or connectivity from the node is broken, or a
+        proxy blocks the pull.
+        Remediation: test the registry endpoint from the node, check firewall
+        and egress rules, fix connectivity, then rollout restart.
+      source: internal
+    - id: runbook-registry-rate-limited
+      title: Registry rate limit runbook
+      text: |
+        Symptom: pulls fail with "toomanyrequests" from a public registry.
+        Diagnosis: the registry rate limit was hit, often after a mass rollout
+        or a shared egress IP.
+        Remediation: pull once and re-tag to a private mirror registry, stagger
+        rollouts, then restart affected deployments.
+      source: internal
+    - id: runbook-container-exited-nonzero
+      title: Container exited non-zero runbook
+      text: |
+        Symptom: container repeatedly exits with a non-zero code and the pod
+        restarts (not CrashLoopBackOff yet).
+        Diagnosis: read the last log lines with kubectl logs --previous;
+        common causes are panic, uncaught exception, or fatal startup error.
+        Remediation: fix the defect or config, verify the fix locally, then
+        rollout restart the deployment.
+      source: internal
+    - id: runbook-memory-pressure-node
+      title: Node memory pressure runbook
+      text: |
+        Symptom: node condition MemoryPressure=true; kubelet may evict pods.
+        Diagnosis: total requests on the node exceed capacity or a workload is
+        leaking memory.
+        Remediation: identify and fix the leaking workload, cordon and drain the
+        node if needed, then watch node conditions until pressure clears.
+      source: internal
+    - id: runbook-disk-pressure-node
+      title: Node disk pressure runbook
+      text: |
+        Symptom: node condition DiskPressure=true and the kubelet starts
+        evicting pods.
+        Diagnosis: container logs or images filled the disk, or a workload
+        writes unbounded data.
+        Remediation: prune old images and logs, move data to a volume with
+        space, then clear pressure; set log rotation limits to prevent
+        recurrence.
+      source: internal
+    - id: runbook-kubelet-not-ready
+      title: Kubelet not ready runbook
+      text: |
+        Symptom: node flips NotReady because the kubelet heartbeat stopped.
+        Diagnosis: kubelet crashed, systemd unit failed, or the node lost
+        network to the control plane.
+        Remediation: check kubelet service status on the node, restart the
+        kubelet, drain and reboot if the node is unhealthy.
+      source: internal
+    - id: runbook-etcd-degraded
+      title: Etcd degraded runbook
+      text: |
+        Symptom: control plane slow or flapping; etcd reports degraded health.
+        Diagnosis: slow disk, network partition, or a slow/failed member in the
+        etcd quorum.
+        Remediation: check etcd member health and endpoint status, ensure the
+        quorum is intact, replace the slow member and keep snapshots.
+      source: internal
+    - id: runbook-coredns-not-ready
+      title: CoreDNS not ready runbook
+      text: |
+        Symptom: service-to-service DNS resolution fails intermittently.
+        Diagnosis: CoreDNS pods not Ready, scaled to zero, or crashing.
+        Remediation: check CoreDNS deployment health and logs, scale it up,
+        restart unhealthy replicas, then verify DNS resolution from a pod.
+      source: internal
+    - id: runbook-pod-evicted
+      title: Evicted pod runbook
+      text: |
+        Symptom: pod stuck in Failed with reason Evicted.
+        Diagnosis: node was under memory or disk pressure and the kubelet
+        evicted the pod to reclaim resources.
+        Remediation: reduce the workload footprint or node pressure, then delete
+        the evicted pod so the controller recreates it.
+      source: internal
+    - id: runbook-node-taint
+      title: Node taint runbook
+      text: |
+        Symptom: pods do not schedule onto a node even though resources are
+        available.
+        Diagnosis: a node taint (NoSchedule/NoExecute) blocks scheduling and
+        tolerations are missing.
+        Remediation: check taints with kubectl describe node, add the correct
+        toleration or remove the taint, then verify scheduling.
+      source: internal
+    - id: runbook-connection-refused
+      title: Connection refused runbook
+      text: |
+        Symptom: application logs show connection refused to a backend.
+        Diagnosis: the backend pod is down, not Ready, or the service/port
+        selector is wrong.
+        Remediation: verify the backend deployment has Ready replicas, check
+        the service selector and port, fix the mismatch, then retry the call.
+      source: internal
+    - id: runbook-dns-resolution-failure
+      title: DNS resolution failure runbook
+      text: |
+        Symptom: application logs show unknown host for a service name.
+        Diagnosis: service name, namespace, or search domains are wrong, or
+        CoreDNS is failing.
+        Remediation: verify the service name and namespace, check CoreDNS
+        health, correct the address, then restart the affected workload.
+      source: internal
+    - id: runbook-502-bad-gateway
+      title: 502 Bad Gateway runbook
+      text: |
+        Symptom: ingress or API gateway returns 502 to clients.
+        Diagnosis: the upstream service has no Ready endpoints, is crashing, or
+        the ingress backend config is stale.
+        Remediation: check the upstream pods and endpoints, fix the failing
+        backend, or roll back the gateway config, then verify end-to-end.
+      source: internal
+    - id: runbook-database-connection-pool-exhausted
+      title: Database connection pool exhausted runbook
+      text: |
+        Symptom: application errors with "connection pool exhausted" or
+        "timeout waiting for connection".
+        Diagnosis: too many app instances share a small pool, or a connection
+        leak holds connections open.
+        Remediation: scale the pool or the database, restart the application to
+        clear leaked connections, then fix the leak in code.
+      source: internal
+    - id: runbook-database-deadlock
+      title: Database deadlock runbook
+      text: |
+        Symptom: transaction errors with deadlock or lock timeout.
+        Diagnosis: two transactions contend for the same rows, often after a
+        bad migration or a slow query.
+        Remediation: identify the contending query, add indexes, reduce lock
+        scope, or roll back the offending migration, then verify throughput.
+      source: internal
+    - id: runbook-redis-unavailable
+      title: Redis unavailable runbook
+      text: |
+        Symptom: application errors connecting to Redis; caching breaks.
+        Diagnosis: Redis pod down, out of memory (OOM), or cluster endpoints
+        unreachable.
+        Remediation: restart Redis, verify maxmemory policy and persistence,
+        then confirm the app can reconnect and repopulate the cache.
+      source: internal
+    - id: runbook-disk-full
+      title: Disk full runbook
+      text: |
+        Symptom: workload writes fail with no space left on device; pod or node
+        disk 100% full.
+        Diagnosis: logs, temp files, or data files filled the volume.
+        Remediation: identify the largest files, clean logs and temp data,
+        expand the volume, and configure log rotation or lifecycle rules.
+      source: internal
+    - id: runbook-certificate-expired
+      title: Expired TLS certificate runbook
+      text: |
+        Symptom: clients report certificate expired or unknown authority.
+        Diagnosis: the ingress or service certificate is expired, or the CA is
+        not trusted by the client.
+        Remediation: renew the certificate with cert-manager or the CA, update
+        trust stores, then verify the TLS handshake with curl.
+      source: internal
+    - id: runbook-network-policy-blocking
+      title: Network policy blocking runbook
+      text: |
+        Symptom: pods cannot reach a service that is healthy, only after a
+        network policy change.
+        Diagnosis: a NetworkPolicy denies the traffic path between namespaces
+        or pods.
+        Remediation: audit the applying network policies, add the allow rule for
+        the app's selector, then verify connectivity from the source pod.
+      source: internal
+    - id: runbook-java-heap-oom
+      title: Java heap OOM runbook
+      text: |
+        Symptom: JVM process dies with OutOfMemoryError: Java heap space.
+        Diagnosis: heap is undersized for the working set or a leak grows the
+        live set.
+        Remediation: capture a heap dump, size -Xmx from the real usage, fix
+        the leak, and set restart limits so the pod recovers after OOM.
+      source: internal
 
   historical_incidents:
     - id: incident-2026-catalogue-oom
@@ -83,6 +356,29 @@ collections:
         Sock Shop orders service entered CrashLoopBackOff after a config change
         introduced a malformed database connection string. Rolling back the
         deployment to the previous image resolved the outage.
+      source: sock-shop
+    - id: incident-2026-api-bad-deploy
+      title: API gateway bad deploy incident
+      text: |
+        A new api-gateway image passed the liveness probe timeout during rollout
+        and every pod restarted, leaving the service without Ready endpoints.
+        Undoing the rollout to the previous revision restored traffic in under
+        two minutes.
+      source: sock-shop
+    - id: incident-2026-node-drain
+      title: Node maintenance incident
+      text: |
+        A worker node was cordoned for maintenance without first draining it,
+        and stateful replicas on the node became unreachable. Draining the node
+        cleanly and rescheduling the workloads restored availability; the
+        operator then ran the maintenance window properly.
+      source: sock-shop
+    - id: incident-2026-cpu-saturation
+      title: CPU saturation incident
+      text: |
+        A CPU-stress container on the user-service node saturated the CPU and
+        latency spiked across the mesh. Moving the stress workload off the node
+        and scaling the user-service deployment recovered p99 latency to normal.
       source: sock-shop
 
   kubernetes_docs:
@@ -105,4 +401,25 @@ collections:
         kubectl cordon <node> marks a node unschedulable so no new pods are
         scheduled; existing pods keep running. kubectl drain additionally
         evicts running pods. Always uncordon after the fix.
+      source: kubernetes
+    - id: k8s-doc-drain-node
+      title: Draining a node safely
+      text: |
+        kubectl drain <node> --ignore-daemonsets --delete-emptydir-data evicts
+        pods from a node before maintenance. Verify workloads reschedule on
+        other nodes and run kubectl uncordon <node> when maintenance finishes.
+      source: kubernetes
+    - id: k8s-doc-scale-deployment
+      title: Scaling a deployment
+      text: |
+        kubectl scale deployment/<name> --replicas=N -n <ns> changes the
+        replica count. Use it to absorb load during an incident, then revert
+        the scale once the root cause is fixed.
+      source: kubernetes
+    - id: k8s-doc-get-events
+      title: Reading pod events
+      text: |
+        kubectl describe pod <name> -n <ns> shows lifecycle events that explain
+        why a pod is Pending, CrashLoopBackOff, or Evicted. Events are the
+        first place to look during diagnosis.
       source: kubernetes
