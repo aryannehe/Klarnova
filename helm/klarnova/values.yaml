@@ -9,6 +9,13 @@ service:
   name: klarnova-backend
   port: 8000
 
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  path: "/"
+  annotations: {}
+
 configmap:
   # In-cluster runtime env. Secrets are dev defaults; override in prod.
   KUBE_IN_CLUSTER: "true"

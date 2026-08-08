@@ -1,0 +1,62 @@
+# Klarnova cloud deployment overrides (Epic H4).
+# Values here layer on top of values.yaml for a managed Kubernetes cluster
+# (EKS / AKS / GKE). Replace the <placeholders> before deploying; see
+# docs/cloud-deployment.md for the full runbook.
+#
+#   helm upgrade --install klarnova helm/klarnova \
+#     -f helm/klarnova/values.yaml \
+#     -f helm/klarnova/values-cloud.yaml \
+#     --namespace klarnova --create-namespace
+
+image:
+  # Push the backend image to a registry the cluster can pull from, e.g.
+  #   docker tag klarnova-backend:latest <ACCOUNT>.dkr.ecr.us-east-1.amazonaws.com/klarnova-backend
+  repository: "<REGISTRY>/klarnova-backend"
+  tag: latest
+  pullPolicy: Always
+
+# Expose the API over TLS via an Ingress (nginx / aws-load-balancer / etc).
+ingress:
+  enabled: true
+  className: nginx
+  host: "<klarnova.example.com>"
+  path: "/"
+  annotations: {}
+  # EKS (aws-load-balancer-controller) example:
+  # annotations:
+  #   alb.ingress.kubernetes.io/scheme: internet-facing
+  #   alb.ingress.kubernetes.io/target-type: ip
+
+service:
+  name: klarnova-backend
+  port: 8000
+
+configmap:
+  # Real secrets (webhook token, JWT, DB, Ollama, Prometheus) belong in a
+  # Secret or your provider's secret manager; wire via envFrom if you harden
+  # this chart. Values here are the managed-cluster equivalents.
+  ALERTMANAGER_WEBHOOK_TOKEN: "<change-me>"
+  JWT_SECRET: "<change-me-strong-random>"
+  KUBE_IN_CLUSTER: "true"
+  DATABASE_URL: "postgresql+asyncpg://postgres:postgres@<rds-host>:5432/klarnova"
+  OLLAMA_BASE_URL: "http://<ollama-service>:11434"
+  PROMETHEUS_URL: "http://<prometheus-service>:9090"
+  CHROMA_PERSIST_DIR: "/data/chroma"
+  KB_SOURCE_LIST: "knowledge-base/sources.yaml"
+  KB_AUTO_INGEST: "true"
+  KB_REFRESH_INTERVAL: "3600"
+
+persistence:
+  # Leave storageClass empty to use the cluster default; or pin one:
+  # EKS gp3, AKS managed-csi, GKE standard-rwo.
+  storageClass: ""
+  size: 10Gi
+  mountPath: /data
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
