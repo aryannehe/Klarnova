@@ -8,6 +8,7 @@ of looping indefinitely.
 """
 import time
 
+from app.ablation import ablation
 from app.agents.state import AgentState
 from app.k8s.client import k8s_client
 
@@ -95,6 +96,16 @@ def _poll_health(state: AgentState) -> bool:
 
 
 def validation_node(state: AgentState):
+    if ablation.disable_validation:
+        return {
+            "is_resolved": True,
+            "retry_count": int(state.get("retry_count", 0)),
+            "escalated": False,
+            "messages": [
+                {"role": "system", "content": "Validation: skipped (ablation) - assumed resolved"}
+            ],
+        }
+
     resolved = _poll_health(state)
     retry_count = int(state.get("retry_count", 0))
     max_retries = int(state.get("max_retries", DEFAULT_MAX_RETRIES))

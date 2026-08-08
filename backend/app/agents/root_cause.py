@@ -12,14 +12,24 @@ DEFAULT_CONFIDENCE = 0.7
 def _fallback_diagnosis(state: AgentState) -> str:
     """Deterministic diagnosis when the LLM is unavailable (fail safe)."""
     logs = " ".join(state.get("logs", []))[-500:]
-    if "OOMKilled" in logs or "OutOfMemory" in logs:
+    events = " ".join(state.get("events", []))[-500:]
+    haystack = f"{logs} {events}"
+    if "OOMKilled" in haystack or "OutOfMemory" in haystack:
         return "container terminated by out-of-memory (OOMKilled)"
-    if "CrashLoopBackOff" in logs or "Back-off" in logs:
+    if "CrashLoopBackOff" in haystack or "Back-off" in haystack:
         return "container is crash-looping (CrashLoopBackOff)"
-    if "ImagePull" in logs or "image pull" in logs:
+    if "ImagePull" in haystack or "image pull" in haystack:
         return "image pull failure (ImagePullBackOff)"
-    if "connection refused" in logs or "Connection refused" in logs:
+    if "connection refused" in haystack.lower():
         return "service startup failed - connection refused"
+    if "liveness probe" in haystack.lower() or "readiness probe" in haystack.lower():
+        return "deployment failing health probes (liveness/readiness)"
+    if "MemoryPressure" in haystack or "memory pressure" in haystack.lower():
+        return "node under memory pressure"
+    if "DiskPressure" in haystack or "disk pressure" in haystack.lower():
+        return "node under disk pressure"
+    if "CPUThrottling" in haystack or "high cpu" in haystack.lower():
+        return "sustained high CPU usage"
     return "no definitive signal in logs; recommend human investigation"
 
 

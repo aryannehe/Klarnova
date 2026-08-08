@@ -1,0 +1,131 @@
+# Chaos scenario definitions for the Epic I evaluation (KLR-B7, KLR-I1).
+# Each scenario is an injected failure with a known ground truth, matching
+# docs/evaluation.md §3. `expected_actions` is the set of whitelisted actions
+# that resolve the incident (the mock cluster treats any of them as a fix);
+# `primary_expected_action` is the canonical one for action-accuracy reporting.
+scenarios:
+  - id: S1
+    name: Crash loop
+    alert_name: KubePodCrashLooping
+    labels: {severity: warning, alertname: KubePodCrashLooping}
+    target_resource: api-gateway-7f6d9f6d-b4c21
+    resource_kind: pod
+    namespace: default
+    ground_truth: crash-loop from bad startup
+    diagnosis_keywords: [crash, crashloop]
+    retrieval_ground_truth: [runbook-crashloopbackoff]
+    expected_actions: [restart_pod]
+    primary_expected_action: restart_pod
+    metrics: {restart_count: 4}
+    logs: |
+      CrashLoopBackOff: Back-off restarting failed container
+      api-gateway: exec ./start.sh: no such file or directory
+      Container api-gateway exited with code 127
+      Back-off restarting failed container api-gateway
+    events:
+      - 'Warning Failed: back-off 10s restarting failed container=api-gateway pod=api-gateway-7f6d9f6d-b4c21'
+
+  - id: S2
+    name: OOM kill
+    alert_name: KubeContainerOOMKilled
+    labels: {severity: warning, alertname: KubeContainerOOMKilled}
+    target_resource: user-service-8d9b2c8c-f19a3
+    resource_kind: pod
+    namespace: default
+    ground_truth: OOMKilled - memory limit too low
+    diagnosis_keywords: [oom, out-of-memory, oomkilled]
+    retrieval_ground_truth: [runbook-oomkilled]
+    expected_actions: [restart_pod]
+    primary_expected_action: restart_pod
+    metrics: {restart_count: 3}
+    logs: |
+      java.lang.OutOfMemoryError: Java heap space
+      Killed: process killed by OOM killer
+      user-service container terminated with reason OOMKilled
+      State: Waiting, Reason: CrashLoopBackOff
+    events:
+      - 'Warning Evicted: The node was low on resource: memory'
+
+  - id: S3
+    name: Bad deploy (failing liveness probe)
+    alert_name: KubeDeploymentReplicasUnavailable
+    labels: {severity: critical, alertname: KubeDeploymentReplicasUnavailable}
+    target_resource: api-gateway
+    resource_kind: deployment
+    namespace: default
+    ground_truth: bad deploy - liveness probe failing, needs rollback
+    diagnosis_keywords: [probe, liveness, bad deploy, rollback]
+    retrieval_ground_truth: [runbook-liveness-probe-failing, runbook-rollout-stuck, runbook-unavailable-replicas]
+    expected_actions: [rollback_deployment]
+    primary_expected_action: rollback_deployment
+    metrics: {unavailable_replicas: 3}
+    logs: |
+      Deployment api-gateway has 0 available replicas out of 3 desired
+      Rollout of api-gateway is stuck, progress deadline exceeded
+      Liveness probe failed: HTTP probe failed with statuscode: 500
+      ReplicaSet api-gateway-84f5d5f56 is running but 0/3 ready
+      No new replicas available, deployment rollout not progressing
+    events:
+      - 'Warning Unhealthy: Liveness probe failed: HTTP probe failed with statuscode: 500'
+      - 'Warning ProgressDeadlineExceeded: ReplicaSet api-gateway-84f5d5f56 has not progressed'
+
+  - id: S4
+    name: Image pull error
+    alert_name: KubePodImagePullBackOff
+    labels: {severity: warning, alertname: KubePodImagePullBackOff}
+    target_resource: user-service
+    resource_kind: deployment
+    namespace: default
+    ground_truth: image pull failure - bad image tag, needs rollback
+    diagnosis_keywords: [image pull, imagepullbackoff, pull]
+    retrieval_ground_truth: [runbook-imagepullbackoff, runbook-image-pull-secret-missing]
+    expected_actions: [rollback_deployment]
+    primary_expected_action: rollback_deployment
+    metrics: {unavailable_replicas: 2}
+    logs: |
+      Failed to pull image "sock-shop/user-service:v1.9.9-rc": rpc error manifest unknown
+      Back-off pulling image user-service:latest
+      Container image "sock-shop/user-service:v1.9.9-rc" already present on machine
+      ErrImagePull / ImagePullBackOff
+    events:
+      - 'Warning Failed: Failed to pull image, image manifest unknown'
+
+  - id: S5
+    name: CPU load
+    alert_name: KubeCPUThrottlingHigh
+    labels: {severity: high, alertname: KubeCPUThrottlingHigh}
+    target_resource: user-service
+    resource_kind: deployment
+    namespace: default
+    ground_truth: CPU saturation from stress workload
+    diagnosis_keywords: [cpu, throttle, saturation]
+    retrieval_ground_truth: [runbook-high-cpu]
+    expected_actions: [scale_deployment, restart_pod]
+    primary_expected_action: scale_deployment
+    metrics: {unavailable_replicas: 1}
+    logs: |
+      CPUThrottlingHigh: container user-service has been throttled for 40% of the period
+      average cpu usage 0.95 of limit, sustained 5 minutes
+      request latency p99 increased to 1200ms
+    events:
+      - 'Warning CpuThrottlingHigh: cpu throttling detected'
+
+  - id: S6
+    name: Node pressure
+    alert_name: KubeNodeNotReady
+    labels: {severity: severe, alertname: KubeNodeNotReady}
+    target_resource: worker-node-2
+    resource_kind: node
+    namespace: default
+    ground_truth: node under memory pressure - human-gated cordon
+    diagnosis_keywords: [pressure, node]
+    retrieval_ground_truth: [runbook-memory-pressure-node, runbook-nodenotready]
+    expected_actions: [cordon_node]
+    primary_expected_action: cordon_node
+    metrics: {unavailable_replicas: 2}
+    logs: |
+      MemoryPressure node condition is true, node worker-node-2
+      kubelet is evicting pods due to memory pressure
+      node worker-node-2 is not ready
+    events:
+      - 'Normal NodeHasMemoryPressure: node worker-node-2 has memory pressure'

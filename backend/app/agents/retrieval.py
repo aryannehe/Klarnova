@@ -5,6 +5,7 @@ empty results (never fabricated) when the vector store is unavailable.
 """
 from typing import Any
 
+from app.ablation import ablation
 from app.agents.state import AgentState
 from app.rag.store import RUNBOOKS, vector_store
 
@@ -23,6 +24,8 @@ def retrieve(
     similarity_threshold: float = 1.2,
 ) -> list[dict[str, Any]]:
     """Return top-k matching documents; empty list when the store is down."""
+    if ablation.disable_rag:
+        return []
     try:
         return vector_store.query_text(
             query,
