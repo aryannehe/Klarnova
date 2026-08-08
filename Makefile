@@ -1,48 +1,31 @@
-# Klarnova — developer Makefile (KLR-A8)
-# Targets: dev / up / down / test / lint / migrate / seed / demo / reset
+.PHONY: setup dev test lint seed demo deploy reset
 
-SHELL := cmd
-VENV_PY := .venv\Scripts\python.exe
-VENV_PIP := .venv\Scripts\pip.exe
+SHELL := cmd.exe
+.SHELLFLAGS := /C
 
-.PHONY: dev up down ai-up ai-down migrate test lint seed demo reset
+setup:
+	cd backend && .\.venv\Scripts\pip install -r requirements.txt
+	cd frontend && npm install
 
-## Backend (local venv, needs postgres+redis via docker)
 dev:
-	$(VENV_PY) -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
-
-## Full docker stack (postgres + redis + backend)
-up:
-	docker compose up -d --build
-
-## AI services (chromadb + ollama)
-ai-up:
-	docker compose --profile ai up -d
-
-down:
-	docker compose down
-
-migrate:
-	$(VENV_PY) -m alembic -c backend\alembic.ini upgrade head
-
-migrate-new:
-	$(VENV_PY) -m alembic -c backend\alembic.ini revision --autogenerate -m "$(name)"
+	cd backend && .\.venv\Scripts\uvicorn app.main:app --reload &
+	cd frontend && npm run dev &
 
 test:
-	$(VENV_PY) -m pytest backend\tests -q
+	cd backend && .\.venv\Scripts\pytest
 
 lint:
-	$(VENV_PY) -m ruff check backend
+	cd backend && .\.venv\Scripts\ruff check .
+	cd frontend && npx tsc --noEmit
 
 seed:
-	$(VENV_PY) backend\scripts\seed.py
+	cd scripts && .\..\backend\.venv\Scripts\python seed.py
 
-## Phase 1 demo: apply sample apps + RBAC to the running cluster
 demo:
-	kubectl apply -f k8s\namespace.yaml
-	kubectl apply -f k8s\rbac\
-	kubectl apply -f k8s\sample-app\
-	kubectl apply -f k8s\monitoring\
+	cd scripts && bash demo.sh
+
+deploy:
+	helm install klarnova helm/klarnova
 
 reset:
-	docker compose down -v
+	cd scripts && bash reset.sh

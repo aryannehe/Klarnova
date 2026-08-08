@@ -1,0 +1,99 @@
+# Resource-trimmed values for kube-prometheus-stack on Minikube (dev)
+global:
+  rbac:
+    create: true
+
+alertmanager:
+  enabled: true
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: ['alertname', 'job']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 1h
+      receiver: 'klarnova-webhook'
+      routes:
+      - match:
+          alertname: Watchdog
+        receiver: 'null'
+      # Minikube control-plane targets are always down / unreachable: silence
+      # them so the demo surface stays focused on application alerts.
+      - match_re:
+          alertname: 'etcdInsufficientMembers|etcdMembersDown|etcdHighNumberOfFailedProposals|KubeSchedulerInstanceUnreachable|KubeControllerManagerInstanceUnreachable|TargetDown'
+        receiver: 'null'
+    receivers:
+    - name: 'null'
+    - name: 'klarnova-webhook'
+      webhook_configs:
+      - url: 'http://klarnova-backend.default.svc:8000/v1/webhooks/alertmanager'
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: 'dev-token'
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+grafana:
+  enabled: true
+  adminPassword: "admin"
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+  sidecar:
+    datasources:
+      enabled: true
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+
+prometheus:
+  prometheusSpec:
+    retention: 1d
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1500m
+        memory: 2Gi
+    enableAdminAPI: false
+    podAntiAffinity: ""
+    affinity: {}
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+kubeStateMetrics:
+  enabled: true
+
+prometheus-node-exporter:
+  enabled: true
+
+kubeScheduler:
+  enabled: true
+kubeControllerManager:
+  enabled: true
+kubeEtcd:
+  enabled: true
+kubeProxy:
+  enabled: true

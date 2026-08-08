@@ -1,53 +1,63 @@
-"""Minimal LangGraph wiring (KLR-C7).
+from langgraph.graph import END, StateGraph
 
-Phase 1 graph: a single deterministic `monitoring` node that produces the
-detection decision (severity/priority classification) from raw alert data.
-Later phases add Investigation → Retrieval → Root Cause → … as nodes; the
-frozen AgentState contract (KLR-A3) is the state flowing through it.
-"""
-
-from __future__ import annotations
-
-from langgraph.graph import END, START, StateGraph
-
+from app.agents.investigation import investigation_node
+from app.agents.planning import planning_node
+from app.agents.remediation import remediation_node
+from app.agents.reporting import reporting_node
+from app.agents.retrieval import retrieval_node
+from app.agents.root_cause import root_cause_node
+from app.agents.safety import safety_node
 from app.agents.state import AgentState
-from app.services.classification import classify_labels
+from app.agents.validation import validation_node
 
 
-def monitoring_node(state: AgentState) -> AgentState:
-    """Detection decision: classify severity/priority from raw alert labels."""
-    incident = state.incident
-    if incident is None:
-        return state
-    severity, priority = classify_labels(incident.labels or {})
-    incident.severity = severity
-    incident.priority = priority
-    updated = state.model_dump()
-    updated.update(severity=severity, priority=priority, incident=incident)
-    return AgentState(**updated)
+def build_investigation_graph():
+    """Detection -> evidence -> diagnosis -> plan -> safety gate."""
+    workflow = StateGraph(AgentState)
+
+    workflow.add_node("investigation", investigation_node)
+    workflow.add_node("retrieval", retrieval_node)
+    workflow.add_node("root_cause", root_cause_node)
+    workflow.add_node("planning", planning_node)
+    workflow.add_node("safety", safety_node)
+
+    workflow.set_entry_point("investigation")
+    workflow.add_edge("investigation", "retrieval")
+    workflow.add_edge("retrieval", "root_cause")
+    workflow.add_edge("root_cause", "planning")
+    workflow.add_edge("planning", "safety")
+    workflow.add_edge("safety", END)
+
+    return workflow.compile()
 
 
-def build_detection_graph():
-    graph = StateGraph(AgentState)
-    graph.add_node("monitoring", monitoring_node)
-    graph.add_edge(START, "monitoring")
-    graph.add_edge("monitoring", END)
-    return graph.compile()
+def _route_after_validation(state):
+    """Bounded retry-then-escalate: retry, or report once resolved/escalated."""
+    if state.get("is_resolved") or state.get("escalated"):
+        return "reporting"
+    return "remediation"
 
 
-_compiled = None
+def build_remediation_graph():
+    """Execute approved action -> validate -> (retry | report)."""
+    workflow = StateGraph(AgentState)
+
+    workflow.add_node("remediation", remediation_node)
+    workflow.add_node("validation", validation_node)
+    workflow.add_node("reporting", reporting_node)
+
+    workflow.set_entry_point("remediation")
+    workflow.add_edge("remediation", "validation")
+    workflow.add_conditional_edges(
+        "validation",
+        _route_after_validation,
+        {"reporting": "reporting", "remediation": "remediation"},
+    )
+    workflow.add_edge("reporting", END)
+
+    return workflow.compile()
 
 
-def get_detection_graph():
-    global _compiled
-    if _compiled is None:
-        _compiled = build_detection_graph()
-    return _compiled
-
-
-def run_detection(state: AgentState) -> AgentState:
-    """Run the graph and return the resulting (classified) state."""
-    result = get_detection_graph().invoke(state)
-    if isinstance(result, dict):
-        return AgentState(**result)
-    return result
+def build_graph():
+    """Backwards-compatible alias: the investigation phase graph."""
+    return build_investigation_graph()

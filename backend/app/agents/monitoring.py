@@ -1,133 +1,87 @@
-"""Monitoring / Ingestion Agent (KLR-C5) — rule-based.
+"""Monitoring agent - detection and severity/priority classification.
 
-Polls Prometheus (ALERTS) and the K8s API, evaluates detection rules, and
-classifies incidents (SEV-1…4 / P1…4). Rule-based only, per agent-design §1.
+Severity/priority per the PRD section 4.3:
+
+    SEV-1 (P1) critical  -> service down / customer-facing outage
+    SEV-2 (P2) high      -> major degradation
+    SEV-3 (P3) medium    -> partial / localised issue
+    SEV-4 (P4) low       -> minor or non-urgent
+
+Classification is deterministic (rule-based), never LLM-driven, so the
+safety guarantees never depend on probabilistic model output.
 """
+import re
+from typing import Any
 
-from __future__ import annotations
+from app.agents.state import AgentState
 
-import asyncio
-import logging
+SEV_MAP = {
+    "critical": "SEV-1",
+    "high": "SEV-2",
+    "warning": "SEV-3",
+    "warn": "SEV-3",
+    "info": "SEV-4",
+    "severe": "SEV-1",
+}
 
-from sqlalchemy.ext.asyncio import AsyncSession
+PRIORITY_MAP = {"SEV-1": "P1", "SEV-2": "P2", "SEV-3": "P3", "SEV-4": "P4"}
 
-from app.agents.state import AgentState, IncidentSchema
-from app.config import Settings
-from app.k8s.client import get_k8s_client
-from app.k8s.metrics import PrometheusClient, get_prometheus_url
-from app.services.classification import (
-    affected_resource_from_labels,
-    classify_labels,
-    fingerprint_alert,
-)
-
-logger = logging.getLogger(__name__)
-
-
-class MonitoringAgent:
-    """Poll-loop agent. Each detection decision writes to AgentState."""
-
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-        self._prometheus: PrometheusClient | None = None
-
-    @property
-    def prometheus(self) -> PrometheusClient:
-        if self._prometheus is None:
-            self._prometheus = PrometheusClient(get_prometheus_url())
-        return self._prometheus
-
-    async def detect_from_alerts(self, session: AsyncSession) -> list[AgentState]:
-        """Poll Prometheus for firing alerts and build detection decisions."""
-        alerts = await asyncio.to_thread(self.prometheus.firing_alerts)
-        decisions: list[AgentState] = []
-        for alert in alerts:
-            labels = alert.get("labels") or {}
-            severity, priority = classify_labels(labels)
-            fingerprint = alert.get("fingerprint") or fingerprint_alert(
-                _alert_from_labels(labels, alert.get("annotations") or {})
-            )
-            state = AgentState(
-                severity=severity,
-                priority=priority,
-                incident=IncidentSchema(
-                    alert_fingerprint=fingerprint,
-                    alert_name=labels.get("alertname"),
-                    source="monitoring_agent",
-                    severity=severity,
-                    priority=priority,
-                    affected_resource=affected_resource_from_labels(labels),
-                    summary=(alert.get("annotations") or {}).get("summary"),
-                    evidence=alert.get("annotations") or {},
-                    started_at=_parse_dt(alert.get("starts_at")),
-                ),
-            )
-            decisions.append(state)
-        return decisions
-
-    async def detect_unhealthy_pods(self, session: AsyncSession) -> list[AgentState]:
-        """Poll K8s API for crash-looping / not-ready pods (rule-based detection)."""
-        client = get_k8s_client()
-        pods = await asyncio.to_thread(
-            client.list_pods, self.settings.monitoring_namespace
-        )
-        decisions: list[AgentState] = []
-        for pod in pods:
-            statuses = pod.get("container_statuses", [])
-            restart_count = sum(s.get("restart_count", 0) for s in statuses)
-            all_ready = bool(statuses) and all(s.get("ready") for s in statuses)
-            phase = pod.get("phase")
-            if phase == "Running" and restart_count < 2 and all_ready:
-                continue
-            if restart_count >= 2:
-                reason = "CrashLoopBackOff"
-            elif not all_ready:
-                reason = "NotReady"
-            else:
-                reason = phase
-            severity, priority = classify_labels(
-                {"alertname": "KubePodCrashLooping", "severity": "warning"}
-            )
-            # Stable per-pod identity (no restart_count) so repeated polls of the
-            # same ongoing problem update one incident instead of creating a new
-            # row every poll tick.
-            fingerprint = f"pod:{pod['namespace']}/{pod['name']}"
-            state = AgentState(
-                severity=severity,
-                priority=priority,
-                incident=IncidentSchema(
-                    alert_fingerprint=fingerprint,
-                    alert_name="KubePodCrashLooping",
-                    source="monitoring_agent",
-                    severity=severity,
-                    priority=priority,
-                    affected_resource=f"{pod['namespace']}/Pod/{pod['name']}",
-                    summary=f"Pod {pod['name']} in phase {reason} with {restart_count} restarts",
-                    evidence={"phase": phase, "restart_count": restart_count, "ready": all_ready},
-                ),
-            )
-            decisions.append(state)
-        return decisions
-
-    async def run_once(self, session: AsyncSession) -> list[AgentState]:
-        decisions = []
-        try:
-            decisions.extend(await self.detect_from_alerts(session))
-        except Exception as exc:  # pragma: no cover - network dependent
-            logger.warning("Monitoring: Prometheus poll failed: %s", exc)
-        try:
-            decisions.extend(await self.detect_unhealthy_pods(session))
-        except Exception as exc:  # pragma: no cover - network dependent
-            logger.warning("Monitoring: K8s poll failed: %s", exc)
-        return decisions
+KEYWORD_RULES = [
+    (r"down|unavailable|notready|outage|nodebooting|connectionlost", "SEV-1"),
+    (r"highmemory|highcpu|high.*load|degraded|elevated|replica.*unavailable", "SEV-2"),
+    (r"restart|crashloop|backoff|imagerullback|oom", "SEV-3"),
+    (r"info|minor|low|warning", "SEV-4"),
+]
 
 
-def _alert_from_labels(labels: dict[str, str], annotations: dict[str, str]):
-    """Adapter so label-only alerts reuse the fingerprint helper."""
-    from app.schemas.incident import AlertmanagerWebhook
+def classify_severity(labels: dict[str, Any]) -> tuple[str, str]:
+    """Map Alertmanager labels to (severity, priority)."""
+    sev_label = (labels.get("severity") or "").lower()
+    alertname = (labels.get("alertname") or "").lower()
 
-    return AlertmanagerWebhook(status="firing", labels=labels, annotations=annotations)
+    if sev_label in SEV_MAP:
+        severity = SEV_MAP[sev_label]
+    else:
+        severity = "SEV-3"
+        for pattern, sev in KEYWORD_RULES:
+            if re.search(pattern, alertname):
+                severity = sev
+                break
+
+    return severity, PRIORITY_MAP.get(severity, "P3")
 
 
-def _parse_dt(value) -> None:
-    return None  # kept simple; timestamps come from webhook path in Phase 1
+def detect_anomaly(metrics: dict[str, Any]) -> str | None:
+    """Return a reason string when a metric anomaly is detected, else None.
+
+    ``metrics`` is a dict of named PromQL results (see k8s.metrics helpers).
+    """
+    unavailable = metrics.get("unavailable_replicas")
+    if unavailable is not None and unavailable > 0:
+        return f"{unavailable} replica(s) unavailable"
+
+    restarts = metrics.get("restart_count")
+    if restarts is not None and restarts >= 3:
+        return f"pod restart count {restarts} (>= 3)"
+
+    up = metrics.get("up")
+    if up is not None and up < 0.9:
+        return f"Prometheus scrape success below 90% ({up})"
+
+    return None
+
+
+def monitoring_node(state: AgentState):
+    """Classify severity/priority when the webhook did not provide labels."""
+    labels = state.get("incident_data", {}).get("labels", {})
+    severity, priority = classify_severity(labels)
+    return {
+        "severity": severity,
+        "priority": priority,
+        "messages": [
+            {
+                "role": "system",
+                "content": f"Monitoring: incident classified {severity} ({priority})",
+            }
+        ],
+    }

@@ -1,0 +1,108 @@
+# Klarnova knowledge base sources.
+# Each entry is ingested into a Chroma collection for retrieval by the
+# Retrieval agent. `collection` selects runbooks | historical_incidents | kubernetes_docs.
+collections:
+  runbooks:
+    - id: runbook-oomkilled
+      title: OOMKilled runbook
+      text: |
+        Symptom: container terminated with OOMKilled and restarts.
+        Diagnosis: memory limit is too low or the workload leaks memory.
+        Remediation: increase the pod memory limit, tune JVM/GC heap, or
+        move the workload to a larger node. Restart the pod after the change
+        to pick up new limits.
+      source: internal
+    - id: runbook-crashloopbackoff
+      title: CrashLoopBackOff runbook
+      text: |
+        Symptom: pod repeatedly restarts and ends up in CrashLoopBackOff.
+        Diagnosis: inspect the previous container logs (kubectl logs --previous)
+        and pod events; common causes are a missing config, a secret not
+        mounted, a bad command, or a failed startup dependency.
+        Remediation: fix the config/secret or command, then restart the pod.
+        If a bad release caused it, roll back the deployment to the previous
+        image.
+      source: internal
+    - id: runbook-imagepullbackoff
+      title: ImagePullBackOff runbook
+      text: |
+        Symptom: pod stuck in ImagePullBackOff, container cannot start.
+        Diagnosis: image tag does not exist, registry is unreachable, or
+        pull credentials are missing/invalid.
+        Remediation: verify the image tag, fix the imagePullSecrets or the
+        node's credential helper, then rollout restart the deployment.
+      source: internal
+    - id: runbook-nodenotready
+      title: NodeNotReady runbook
+      text: |
+        Symptom: node reported NotReady, workloads on it become unavailable.
+        Diagnosis: check node conditions (MemoryPressure, DiskPressure,
+        KubeletNotReady) and kubelet logs on the node.
+        Remediation: cordon the node to stop new scheduling, drain workloads,
+        fix the root cause (disk, memory, kubelet), then uncordon.
+      source: internal
+    - id: runbook-unavailable-replicas
+      title: Unavailable replicas runbook
+      text: |
+        Symptom: deployment reports unavailable replicas, traffic degraded.
+        Diagnosis: recent rollout failed (bad image/config), node loss, or
+        insufficient resources.
+        Remediation: check rollout status; roll back to a known-good image if
+        the latest rollout is broken, or scale the deployment to meet demand
+        once the root cause is fixed.
+      source: internal
+    - id: runbook-high-cpu
+      title: High CPU usage runbook
+      text: |
+        Symptom: container CPU usage sustained at high percentage of limit.
+        Diagnosis: hot path regression, unbounded loop, or undersized CPU
+        requests.
+        Remediation: capture a profile, identify the regression, and scale the
+        deployment or increase limits as an interim step.
+      source: internal
+    - id: runbook-high-memory
+      title: High memory usage runbook
+      text: |
+        Symptom: container memory usage approaching the limit.
+        Diagnosis: memory leak or over-sized working set.
+        Remediation: restart the pod as an interim fix, then address the leak
+        (heap dumps, GC settings) before the next restart threshold.
+      source: internal
+
+  historical_incidents:
+    - id: incident-2026-catalogue-oom
+      title: Catalogue OOM incident
+      text: |
+        Sock Shop catalogue service crashed with OOMKilled under load spike.
+        Restarting the pod restored service while the memory limit was raised.
+        Root cause was an in-memory cache growing unboundedly.
+      source: sock-shop
+    - id: incident-2026-orders-crashloop
+      title: Orders crash-loop incident
+      text: |
+        Sock Shop orders service entered CrashLoopBackOff after a config change
+        introduced a malformed database connection string. Rolling back the
+        deployment to the previous image resolved the outage.
+      source: sock-shop
+
+  kubernetes_docs:
+    - id: k8s-doc-restart-pod
+      title: Deleting or restarting a pod
+      text: |
+        kubectl delete pod <name> -n <ns> terminates a pod so the controller
+        recreates it. Restart is safe for stateless workloads; for stateful
+        workloads prefer a controlled restart.
+      source: kubernetes
+    - id: k8s-doc-rollback
+      title: Rolling back a deployment
+      text: |
+        kubectl rollout undo deployment/<name> -n <ns> reverts to the previous
+        ReplicaSet image. Check kubectl rollout status before and after.
+      source: kubernetes
+    - id: k8s-doc-cordon
+      title: Cordon a node
+      text: |
+        kubectl cordon <node> marks a node unschedulable so no new pods are
+        scheduled; existing pods keep running. kubectl drain additionally
+        evicts running pods. Always uncordon after the fix.
+      source: kubernetes

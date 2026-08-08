@@ -1,6 +1,10 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: sample
-  labels:
-    kubernetes.io/metadata.name: sample
+  name: default
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sock-shop

@@ -1,0 +1,37 @@
+replicaCount: 1
+
+image:
+  repository: klarnova-backend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  name: klarnova-backend
+  port: 8000
+
+configmap:
+  # In-cluster runtime env. Secrets are dev defaults; override in prod.
+  KUBE_IN_CLUSTER: "true"
+  ALERTMANAGER_WEBHOOK_TOKEN: "dev-token"
+  JWT_SECRET: "change-me-in-production"
+  DATABASE_URL: "postgresql+asyncpg://postgres:postgres@host.minikube.internal:5432/klarnova"
+  OLLAMA_BASE_URL: "http://host.minikube.internal:11434"
+  PROMETHEUS_URL: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
+  CHROMA_PERSIST_DIR: "/data/chroma"
+  KB_SOURCE_LIST: "knowledge-base/sources.yaml"
+  KB_AUTO_INGEST: "true"
+  KB_REFRESH_INTERVAL: "3600"
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 1Gi
+  mountPath: /data
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 2Gi

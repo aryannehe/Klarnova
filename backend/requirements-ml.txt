@@ -1,0 +1,5 @@
+# Heavy ML stack for RAG embeddings. Keep out of the runtime image by default;
+# install separately (or via Dockerfile ARG INSTALL_ML=true) where retrieval
+# with semantic embeddings is required.
+sentence-transformers>=3.0
+chromadb>=1.5

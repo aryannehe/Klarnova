@@ -1,51 +1,80 @@
-"""Klarnova backend entrypoint (KLR-A5)."""
-
-from __future__ import annotations
-
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.router import api_router
-from app.config import get_settings
-from app.core.database import close_engine, init_engine
-from app.core.logging import setup_logging
-from app.services.poller import MonitoringPoller
+from .api.approval import router as approval_router
+from .api.auth import router as auth_router
+from .api.incidents import router as incidents_router
+from .api.kubernetes import router as k8s_router
+from .api.webhooks import router as webhooks_router
+from .config import settings
 
-logger = logging.getLogger("klarnova")
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-    init_engine()
-    poller = MonitoringPoller(settings)
-    await poller.start()
-    logger.info("Klarnova backend started (env=%s)", settings.env)
+    ingest_task: asyncio.Task | None = None
+
+    async def _ingest_once() -> None:
+        try:
+            from .rag.ingest import run_ingest
+
+            count = await asyncio.to_thread(run_ingest)
+            logger.info("knowledge base ingest: %d document(s) added", count)
+        except Exception as exc:
+            logger.warning("knowledge base ingest failed (non-fatal): %s", exc)
+
+    try:
+        from .bandit.learning import seed_bandit_from_db
+
+        await seed_bandit_from_db()
+    except Exception as exc:
+        logger.warning("bandit seed failed (non-fatal): %s", exc)
+
+    async def periodic_refresh() -> None:
+        while True:
+            await _ingest_once()
+            await asyncio.sleep(settings.KB_REFRESH_INTERVAL)
+
+    if settings.KB_AUTO_INGEST:
+        if settings.KB_REFRESH_INTERVAL > 0:
+            ingest_task = asyncio.create_task(periodic_refresh())
+        else:
+            await _ingest_once()
+
     yield
-    await poller.stop()
-    await close_engine()
 
+    if ingest_task is not None:
+        ingest_task.cancel()
 
-def create_app() -> FastAPI:
-    settings = get_settings()
-    setup_logging(settings.log_level)
-    app = FastAPI(
-        title=settings.app_name,
-        version="0.1.0",
-        lifespan=lifespan,
-    )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.include_router(api_router)
-    return app
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan
+)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-app = create_app()
+app.include_router(k8s_router, prefix=f"{settings.API_V1_STR}/kubernetes", tags=["kubernetes"])
+app.include_router(webhooks_router, prefix=f"{settings.API_V1_STR}/webhooks", tags=["webhooks"])
+app.include_router(approval_router, prefix=f"{settings.API_V1_STR}/actions", tags=["actions"])
+app.include_router(incidents_router, prefix=f"{settings.API_V1_STR}/incidents", tags=["incidents"])
+app.include_router(auth_router, prefix=f"{settings.API_V1_STR}/auth", tags=["auth"])
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+@app.get("/ready")
+async def readiness_check():
+    return {"status": "ready"}

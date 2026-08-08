@@ -1,0 +1,29 @@
+# Klarnova risk policy - declarative, severity-aware.
+# Maps (action, severity) -> execution mode: auto | require_approval
+# SEV-1 always requires approval regardless of this table or confidence
+# (hard rule enforced in policy/engine.py).
+actions:
+  restart_pod:
+    sev_4: auto
+    sev_3: auto
+    sev_2: auto
+    sev_1: require_approval
+  delete_pod:
+    sev_4: auto
+    sev_3: auto
+    sev_2: auto
+    sev_1: require_approval
+  scale_deployment:
+    sev_4: auto
+    sev_3: auto
+    sev_2: require_approval
+    sev_1: require_approval
+  rollback_deployment:
+    sev_4: auto
+    sev_3: require_approval
+    sev_2: require_approval
+    sev_1: require_approval
+  cordon_node:
+    default: require_approval
+
+confidence_threshold: 0.75

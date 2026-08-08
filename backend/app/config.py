@@ -1,43 +1,50 @@
-"""Application settings. Loaded from environment / .env via pydantic-settings."""
-
-from __future__ import annotations
-
-from functools import lru_cache
-
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    PROJECT_NAME: str = "Klarnova"
+    API_V1_STR: str = "/v1"
+    
+    # LLM
+    LLM_PROVIDER: str = "ollama"
+    OPENAI_API_KEY: str = ""
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    LLM_MODEL: str = "llama3.2:3b"
+    
+    # Databases
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/klarnova"
+    REDIS_URL: str = "redis://localhost:6379/0"
+    CHROMA_HOST: str = "localhost"
+    CHROMA_PORT: int = 8000
+    
+    # K8s
+    KUBE_IN_CLUSTER: bool = False
+    
+    # Observability
+    PROMETHEUS_URL: str = "http://localhost:9090"
+    ALERTMANAGER_WEBHOOK_TOKEN: str = "secret-token"
+    LOKI_URL: str = "" # Optional
+    
+    # Extra config
+    CHROMA_PERSIST_DIR: str = "data/chroma"
+    EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
+    TARGET_NAMESPACE: str = "default"
+    KB_REFRESH_INTERVAL: int = 3600
+    KB_SOURCE_LIST: str = "knowledge-base/sources.yaml"
+    KB_AUTO_INGEST: bool = True
+    
+    # Auth
+    JWT_SECRET: str = "supersecret"
+    JWT_EXPIRY: int = 3600
+    ALGORITHM: str = "HS256"
 
-    app_name: str = "Klarnova"
-    env: str = "development"
-    log_level: str = "INFO"
+    # CORS
+    BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    
+    class Config:
+        env_file = ".env"
+        env_file_encoding = 'utf-8'
+        case_sensitive = True
+        extra = "ignore"
 
-    # --- Database ---
-    database_url: str = "postgresql+asyncpg://klarnova:klarnova@localhost:5433/klarnova"
-    redis_url: str = "redis://localhost:6379/0"
-
-    # --- Webhook (KLR-C4) ---
-    webhook_token: str = "klarnova-dev-token"
-
-    # --- Observability endpoints (discovery/fallback, KLR-C3) ---
-    prometheus_url: str | None = None
-    alertmanager_url: str | None = None
-
-    # --- Monitoring agent (KLR-C5) ---
-    monitoring_enabled: bool = True
-    monitoring_poll_interval_seconds: int = 30
-    monitoring_namespace: str | None = None
-
-    # --- CORS ---
-    cors_origins: list[str] = ["http://localhost:3000"]
-
-    @property
-    def is_incluster(self) -> bool:
-        return self.env == "incluster"
-
-
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
+settings = Settings()

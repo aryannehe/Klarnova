@@ -1,42 +1,36 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+"use client";
 
-type HealthResponse = {
-  status: string;
-  service: string;
-};
+import { useEffect, useState } from "react";
 
-async function getBackendHealth(): Promise<
-  { ok: true; data: HealthResponse } | { ok: false; error: string }
-> {
-  try {
-    const res = await fetch(`${API_URL}/api/v1/health`, { cache: "no-store" });
-    if (!res.ok) {
-      return { ok: false, error: `Backend responded ${res.status}` };
-    }
-    return { ok: true, data: await res.json() };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Unknown error" };
-  }
-}
+export default function Home() {
+  const [healthStatus, setHealthStatus] = useState<string>("Checking...");
 
-export default async function Home() {
-  const health = await getBackendHealth();
+  useEffect(() => {
+    fetch("http://localhost:8000/health")
+      .then((res) => res.json())
+      .then((data) => {
+        setHealthStatus(data.status === "ok" ? "Backend Connected (OK)" : "Backend Error");
+      })
+      .catch((err) => {
+        setHealthStatus("Backend Disconnected");
+      });
+  }, []);
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8">
-      <h1 className="text-2xl font-semibold">Klarnova</h1>
-      <p className="text-sm text-neutral-400">Frontend ↔ backend health round-trip (KLR-A7)</p>
-      {health.ok ? (
-        <div className="rounded-lg border border-green-700 bg-green-950/40 px-4 py-3 text-sm">
-          <span className="font-mono text-green-400">{health.data.status}</span>
-          {" — "}
-          {health.data.service}
+    <div className="flex flex-col flex-1 items-center justify-center min-h-screen bg-zinc-50 font-sans dark:bg-black">
+      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-center text-center py-32 px-16 sm:items-start sm:text-left">
+        <h1 className="text-4xl font-bold tracking-tight text-black dark:text-white mb-8">
+          Klarnova Platform
+        </h1>
+        <div className="flex flex-col items-center gap-4 text-center sm:items-start sm:text-left">
+          <p className="text-xl text-zinc-600 dark:text-zinc-400">
+            AIOps Backend Status:
+          </p>
+          <div className={`px-4 py-2 rounded-full font-semibold text-sm ${healthStatus.includes("OK") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+            {healthStatus}
+          </div>
         </div>
-      ) : (
-        <div className="rounded-lg border border-red-700 bg-red-950/40 px-4 py-3 text-sm">
-          Could not reach backend at <span className="font-mono">{API_URL}</span>: {health.error}
-        </div>
-      )}
-    </main>
+      </main>
+    </div>
   );
 }

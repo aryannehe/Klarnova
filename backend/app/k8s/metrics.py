@@ -1,102 +1,78 @@
-"""Prometheus query wrapper (KLR-C2) — thin client over the HTTP API.
+"""Prometheus metric helpers used by the Monitoring and Validation agents.
 
-Uses httpx for async access. Endpoints used in Phase 1:
-  - GET /api/v1/query        (instant queries, e.g. ALERTS)
-  - GET /api/v1/query_range  (trend data)
-  - GET /api/v1/alerts       (active alerts)
-  - GET /api/v1/rules        (recording + alert rules)
+All functions are async and return plain Python values; they degrade to
+``None`` when Prometheus is unreachable so the rest of the pipeline can
+fail safe (escalate rather than act on missing data).
 """
 
-from __future__ import annotations
-
-import httpx
+from app.discovery.scraper import prometheus_scraper
 
 
-class PrometheusError(RuntimeError):
-    pass
+def _first_value(result: dict) -> float | None:
+    """Extract the scalar value from a Prometheus instant-query result."""
+    try:
+        return float(result["data"]["result"][0]["value"][1])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
 
 
-class PrometheusClient:
-    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-
-    def _get(self, path: str, params: dict | None = None) -> dict:
-        try:
-            resp = httpx.get(
-                f"{self.base_url}{path}", params=params, timeout=self.timeout, follow_redirects=True
-            )
-        except httpx.HTTPError as exc:  # pragma: no cover - network dependent
-            raise PrometheusError(f"Prometheus unreachable at {self.base_url}: {exc}") from exc
-        resp.raise_for_status()
-        body = resp.json()
-        if body.get("status") != "success":
-            raise PrometheusError(f"Prometheus API error: {body.get('error')}")
-        return body["data"]
-
-    def query(self, expr: str, time: str | None = None) -> list[dict]:
-        """Instant vector query. Returns list of {metric, value}."""
-        params = {"query": expr}
-        if time:
-            params["time"] = time
-        data = self._get("/api/v1/query", params)
-        return _normalise_result(data.get("result", []))
-
-    def query_range(self, expr: str, start: str, end: str, step: str) -> list[dict]:
-        data = self._get(
-            "/api/v1/query_range",
-            {"query": expr, "start": start, "end": end, "step": step},
-        )
-        return _normalise_result(data.get("result", []))
-
-    def active_alerts(self) -> list[dict]:
-        data = self._get("/api/v1/alerts")
-        return data.get("alerts", [])
-
-    def firing_alerts(self) -> list[dict]:
-        """Alerts currently firing, as {name, labels, annotations, startsAt, fingerprint}."""
-        result = []
-        for alert in self.active_alerts():
-            if alert.get("state") != "firing":
-                continue
-            result.append(
-                {
-                    "name": alert.get("labels", {}).get("alertname"),
-                    "labels": alert.get("labels", {}),
-                    "annotations": alert.get("annotations", {}),
-                    "starts_at": alert.get("startsAt"),
-                    "fingerprint": alert.get("fingerprint"),
-                }
-            )
-        return result
+async def query_value(query_str: str) -> float | None:
+    result = await prometheus_scraper.query(query_str)
+    if result.get("status") != "success":
+        return None
+    return _first_value(result)
 
 
-def _normalise_result(result: list[dict]) -> list[dict]:
-    """Prometheus result vector → [{metric, value}] with parsed floats."""
-    out = []
-    for item in result:
-        metric = item.get("metric", {})
-        raw = item.get("value", [None, "0"])[1]
-        out.append({"metric": metric, "value": float(raw)})
-    return out
+async def get_up_status() -> float | None:
+    """Fraction of scrape targets that are up (0.0-1.0)."""
+    return await query_value("sum(up) / count(up)")
 
 
-_URL: str | None = None
+async def get_unavailable_replicas(deployment: str, namespace: str) -> float | None:
+    return await query_value(
+        'kube_deployment_status_replicas_unavailable'
+        f'{{namespace="{namespace}", deployment="{deployment}"}}'
+    )
 
 
-def set_prometheus_url(url: str) -> None:
-    global _URL
-    _URL = url
+async def get_available_replicas(deployment: str, namespace: str) -> float | None:
+    return await query_value(
+        'kube_deployment_status_replicas_available'
+        f'{{namespace="{namespace}", deployment="{deployment}"}}'
+    )
 
 
-def get_prometheus_url() -> str:
-    """Resolve Prometheus base URL: env override → discovery → default."""
-    if _URL:
-        return _URL
-    from app.config import get_settings
-    from app.discovery.auto_discovery import discover_prometheus_url
+async def get_restart_count(pod: str, namespace: str) -> float | None:
+    return await query_value(
+        'sum(kube_pod_container_status_restarts_total'
+        f'{{namespace="{namespace}", pod="{pod}"}})'
+    )
 
-    settings = get_settings()
-    url = settings.prometheus_url or discover_prometheus_url()
-    set_prometheus_url(url)
-    return url
+
+async def get_cpu_usage(pod: str, namespace: str) -> float | None:
+    """CPU cores used, averaged over the last 5 minutes."""
+    return await query_value(
+        'sum(rate(container_cpu_usage_seconds_total'
+        f'{{namespace="{namespace}", pod="{pod}"}}[5m]))'
+    )
+
+
+async def get_memory_usage(pod: str, namespace: str) -> float | None:
+    """Memory used in bytes."""
+    return await query_value(
+        'sum(container_memory_working_set_bytes'
+        f'{{namespace="{namespace}", pod="{pod}"}})'
+    )
+
+
+async def pod_restarting(pod: str, namespace: str, threshold: float = 1.0) -> bool:
+    restarts = await get_restart_count(pod, namespace)
+    return restarts is not None and restarts >= threshold
+
+
+async def cluster_healthy() -> bool:
+    """Overall health used by the Validation agent after remediation."""
+    up = await get_up_status()
+    if up is None:
+        return False
+    return up >= 0.9
