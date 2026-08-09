@@ -16,10 +16,17 @@ def _fallback_diagnosis(state: AgentState) -> str:
     haystack = f"{logs} {events}"
     if "OOMKilled" in haystack or "OutOfMemory" in haystack:
         return "container terminated by out-of-memory (OOMKilled)"
-    if "CrashLoopBackOff" in haystack or "Back-off" in haystack:
-        return "container is crash-looping (CrashLoopBackOff)"
-    if "ImagePull" in haystack or "image pull" in haystack:
+    # Image-pull must be checked before crash-loop: image-pull logs contain
+    # "Back-off pulling image ..." which would otherwise look like a crash loop.
+    if (
+        "ImagePull" in haystack
+        or "image pull" in haystack.lower()
+        or "failed to pull image" in haystack.lower()
+        or "manifest unknown" in haystack.lower()
+    ):
         return "image pull failure (ImagePullBackOff)"
+    if "CrashLoopBackOff" in haystack or "back-off restarting" in haystack.lower():
+        return "container is crash-looping (CrashLoopBackOff)"
     if "connection refused" in haystack.lower():
         return "service startup failed - connection refused"
     if "liveness probe" in haystack.lower() or "readiness probe" in haystack.lower():
