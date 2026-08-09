@@ -55,7 +55,10 @@ def load_record(path: str | Path) -> dict[str, Any]:
 def load_records(results_dir: str | Path) -> list[dict[str, Any]]:
     out = []
     for path in sorted(Path(results_dir).glob("**/*.json")):
-        out.append(load_record(path))
+        record = load_record(path)
+        # skip aggregate outputs (metrics.json) that live beside the records
+        if "scenario_id" in record and "config" in record:
+            out.append(record)
     return out
 
 
