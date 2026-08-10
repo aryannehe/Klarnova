@@ -406,4 +406,4 @@ GitHub Actions (`.github/workflows/ci.yml`) runs backend lint + tests and fronte
 - Gayatri
 - Om
 
-See [docs/CONTRIBUTORS.md](docs/CONTRIBUTORS.md).
+
