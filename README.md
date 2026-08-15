@@ -387,6 +387,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs backend lint + tests and fronte
 
 | Doc | Contents |
 |-----|----------|
+| [docs/understanding-klarnova.md](docs/understanding-klarnova.md) | Newcomer's guide — concepts, flow, and how parts connect |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | Roadmap & implementation status |
 | [docs/Klarnova_Technical_Architecture.md](docs/Klarnova_Technical_Architecture.md) | Deep-dive architecture |
 | [docs/api-reference.md](docs/api-reference.md) | API reference |
