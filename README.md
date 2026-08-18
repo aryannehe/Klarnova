@@ -6,7 +6,7 @@ Klarnova is an AI-powered SRE assistant that watches your cluster through Promet
 
 ### Demo
 
-<video src="./assets/klarnova_video.mp4" controls width="720"></video>
+[▶ Watch the demo video](./assets/klarnova_video.mp4)
 
 ---
 
