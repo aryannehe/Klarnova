@@ -4,10 +4,6 @@
 
 Klarnova is an AI-powered SRE assistant that watches your cluster through Prometheus/Alertmanager, turns alerts into structured incidents, runs a multi-agent investigation to find the root cause, proposes a safe remediation, and executes it — subject to a declarative risk policy and human approval when needed. Every outcome feeds a contextual bandit that learns which action works best per incident type, and resolved incidents are written back into a knowledge base so the system gets smarter over time.
 
-### Demo
-
-[▶ Watch the demo video](./assets/klarnova_video.mp4)
-
 ---
 
 ## Table of Contents
