@@ -1,12 +1,105 @@
-"""Shared scenario-aware fake Kubernetes client.
+"""Shared scenario-aware fakes for the offline/test pipeline.
 
 Extracted from ``chaos-testing/offline.py`` so that the offline evaluation
-harness and the pytest integration suite exercise the *same* cluster double.
-The mock follows the scenario ground truth: once any ``expected_actions`` has
-been applied, the cluster reads as healthy, which makes validation pass.
+harness and the pytest integration suite exercise the *same* doubles:
+
+* ``MockCluster`` fakes the Kubernetes client. It follows the scenario ground
+  truth: once any ``expected_actions`` has been applied, the cluster reads as
+  healthy, which makes validation pass.
+* ``MockVectorStore`` fakes the Chroma-backed retrieval store, returning the
+  scenario's ``retrieval_ground_truth`` runbooks as if they were the top-k
+  semantic matches. This keeps the pipeline hermetic (no chromadb /
+  sentence-transformers, no warm index) while preserving the full-vs-no-rag
+  contrast: the ``disable_rag`` ablation still short-circuits to no docs.
 """
 import types
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_KB_FALLBACK = REPO_ROOT / "knowledge-base" / "sources.yaml"
+
+# L2 distance assigned to the scenario's ground-truth runbooks. Well inside the
+# planner's ``HINT_RELEVANCE_DISTANCE`` (0.55) so the hint always counts.
+RELEVANT_DISTANCE = 0.1
+
+
+def _kb_sources_path() -> Path:
+    from app.config import settings
+
+    configured = Path(settings.KB_SOURCE_LIST)
+    if configured.exists():
+        return configured
+    return _KB_FALLBACK
+
+
+@lru_cache(maxsize=1)
+def _load_kb_documents(path: str | None = None) -> dict[str, dict]:
+    """Map every knowledge-base doc id to its entry, across all collections."""
+    import yaml
+
+    source = Path(path) if path else _kb_sources_path()
+    with open(source, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    docs: dict[str, dict] = {}
+    for entries in (data.get("collections") or {}).values():
+        for entry in entries or []:
+            if entry.get("id"):
+                docs[entry["id"]] = entry
+    return docs
+
+
+class MockVectorStore:
+    """Deterministic stand-in for ``app.rag.store.vector_store``.
+
+    ``query_text`` returns the scenario's ground-truth runbooks (loaded from the
+    knowledge base) instead of embedding the query, so retrieval is reproducible
+    without the ML stack. Writes are accepted and ignored.
+    """
+
+    def __init__(self, scenario: dict, kb_documents: dict[str, dict] | None = None):
+        self.scenario = scenario
+        self._docs = kb_documents if kb_documents is not None else _load_kb_documents()
+        self._loaded = True
+        self.collections: dict[str, Any] = {}
+
+    def query_text(
+        self,
+        query_text: str,
+        n_results: int = 3,
+        collection: str = "runbooks",
+        similarity_threshold: float = 1.2,
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for doc_id in self.scenario.get("retrieval_ground_truth") or []:
+            entry = self._docs.get(doc_id)
+            if entry is None:
+                continue
+            results.append(
+                {
+                    "doc_id": doc_id,
+                    "document": (entry.get("text") or "").strip(),
+                    "distance": RELEVANT_DISTANCE,
+                    "metadata": {
+                        "title": entry.get("title", ""),
+                        "source": entry.get("source", ""),
+                        "collection": collection,
+                    },
+                }
+            )
+            if len(results) >= n_results:
+                break
+        return results
+
+    def query(self, *_args, **_kwargs) -> dict[str, list[list]]:
+        return {"ids": [[]], "documents": [[]], "distances": [[]], "metadatas": [[]]}
+
+    def add_document(self, *_args, **_kwargs) -> None:
+        return None
+
+    def counts(self) -> dict[str, int]:
+        return {"runbooks": len(self._docs)}
 
 
 def _failing_container_status():
@@ -137,26 +230,40 @@ class MockCluster:
 
 
 def install_mock(cluster: MockCluster):
-    """Swap the k8s client binding in every module that imported it.
+    """Swap the k8s client *and* vector store in every module that imported them.
 
-    Returns a list of ``(module, original)`` pairs so callers can restore the
-    real client afterwards (the eval harness leaves it installed; tests undo it).
+    Returns a list of ``(module, attribute, original)`` triples so callers can
+    restore the real bindings afterwards (the eval harness leaves the mock
+    installed; tests undo it).
     """
+    import app.api.config as config_mod
     import app.k8s.actions as actions_mod
     import app.k8s.client as client_mod
     from app.agents import investigation as inv_mod
+    from app.agents import retrieval as retrieval_mod
     from app.agents import validation as val_mod
+    from app.rag import ingest as ingest_mod
+    from app.rag import store as store_mod
+    from app.rag import writeback as writeback_mod
 
     pairs = []
     for mod in (client_mod, inv_mod, val_mod, actions_mod):
-        pairs.append((mod, getattr(mod, "k8s_client", None)))
+        pairs.append((mod, "k8s_client", getattr(mod, "k8s_client", None)))
         mod.k8s_client = cluster
+
+    store = MockVectorStore(cluster.scenario)
+    for mod in (
+        store_mod, retrieval_mod, writeback_mod, ingest_mod, config_mod,
+    ):
+        if hasattr(mod, "vector_store"):
+            pairs.append((mod, "vector_store", mod.vector_store))
+            mod.vector_store = store
     return pairs
 
 
 def restore_mock(pairs):
-    for mod, original in pairs:
-        mod.k8s_client = original
+    for mod, attr, original in pairs:
+        setattr(mod, attr, original)
 
 
 def force_fallback_llm():
