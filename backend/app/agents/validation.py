@@ -10,12 +10,13 @@ import time
 
 from app.ablation import ablation
 from app.agents.state import AgentState
+from app.config import settings
 from app.k8s.client import k8s_client
 
 DEFAULT_MAX_RETRIES = 2
 
-HEALTH_POLL_TIMEOUT = 120.0
-HEALTH_POLL_INTERVAL = 5.0
+HEALTH_POLL_TIMEOUT = settings.REMEDIATION_HEALTH_TIMEOUT
+HEALTH_POLL_INTERVAL = settings.REMEDIATION_HEALTH_INTERVAL
 
 # Actions that mutate a Deployment/StatefulSet (target_resource is the
 # workload name) rather than an individual pod.
