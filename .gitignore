@@ -16,3 +16,9 @@ dist/
 *.log
 *.err
 backend/uvicorn-test.*
+
+frontend/test-results/
+frontend/playwright-report/
+
+test-reports/*
+!test-reports/latest/

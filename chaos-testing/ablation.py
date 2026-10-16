@@ -57,7 +57,18 @@ def per_config_rows(records, scenario_ids):
                 ),
             }
         rows[config] = {
-            "overall": metrics.aggregate(cfg_records),
+            "overall": {
+                **metrics.aggregate(cfg_records),
+                "diagnosis_accuracy": metrics.mean(
+                    1.0 if r.get("diagnosis_matched") else 0.0 for r in cfg_records
+                ),
+                "retrieval_relevance": metrics.mean(
+                    1.0 if r.get("retrieval_hit") else 0.0 for r in cfg_records
+                ),
+                "action_accuracy": metrics.mean(
+                    1.0 if r.get("action_correct") else 0.0 for r in cfg_records
+                ),
+            },
             "scenarios": sc_overrides,
         }
     return rows
@@ -124,6 +135,31 @@ def _fmt(v):
     return "n/a" if v is None else f"{v:.2f}"
 
 
+def _round(v):
+    return None if v is None else round(v, 3)
+
+
+def check_gates(rows, min_success: float, min_diagnosis: float) -> bool:
+    """Enforce quality thresholds on the ``full`` config (for CI)."""
+    full = rows.get("full")
+    if not full:
+        print("GATE: no 'full' config in results", file=sys.stderr)
+        return False
+    overall = full["overall"]
+    checks = [
+        ("success_rate", overall.get("success_rate"), min_success),
+        ("diagnosis_accuracy", overall.get("diagnosis_accuracy"), min_diagnosis),
+    ]
+    ok = True
+    print("\n=== Ablation quality gates (full config) ===")
+    for name, value, minimum in checks:
+        passed = value is not None and value >= minimum
+        ok = ok and passed
+        shown = "n/a" if value is None else f"{value:.3f}"
+        print(f"  [{'PASS' if passed else 'FAIL'}] {name}: {shown} (min {minimum:.2f})")
+    return ok
+
+
 def write_summary(rows, results_dir: Path):
     with open(results_dir / "summary.csv", "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
@@ -135,7 +171,9 @@ def write_summary(rows, results_dir: Path):
             writer.writerow([config, "ALL", overall["n"],
                              overall.get("mttd_mean_s"), overall.get("mttr_mean_s"),
                              overall.get("success_rate"), overall.get("escalation_rate"),
-                             "", "", ""])
+                             _round(overall.get("diagnosis_accuracy")),
+                             _round(overall.get("retrieval_relevance")),
+                             _round(overall.get("action_accuracy"))])
             for sid, sc in data["scenarios"].items():
                 writer.writerow([config, sid, sc["n"], "", "", "", "",
                                  sc["diagnosis_accuracy"], sc["retrieval_relevance"],
@@ -148,6 +186,10 @@ def write_summary(rows, results_dir: Path):
 def main():
     parser = argparse.ArgumentParser(description="Klarnova ablation summary")
     parser.add_argument("--results", default=str(Path(__file__).parent / "results"))
+    parser.add_argument("--check", action="store_true",
+                        help="exit non-zero if the full config misses quality thresholds")
+    parser.add_argument("--min-success", type=float, default=0.95)
+    parser.add_argument("--min-diagnosis", type=float, default=0.90)
     args = parser.parse_args()
     results_dir = Path(args.results)
     records = metrics.load_records(results_dir)
@@ -158,6 +200,12 @@ def main():
     print_overview(rows)
     print_deltas(rows)
     write_summary(rows, results_dir)
+
+    if args.check:
+        if not check_gates(rows, args.min_success, args.min_diagnosis):
+            print("Ablation gates FAILED", file=sys.stderr)
+            sys.exit(1)
+        print("Ablation gates PASSED")
 
 
 if __name__ == "__main__":

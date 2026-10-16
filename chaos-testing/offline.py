@@ -16,10 +16,15 @@ baselines (manual, threshold-only).
 """
 import json
 import time
-import types
 from typing import Any
 
 from app.ablation import ablation
+from tests.mock_cluster import (
+    MockCluster,
+    fast_validation as _fast_validation,
+    force_fallback_llm as _force_fallback_llm,
+    install_mock,
+)
 
 # --- Simulated latency model (seconds). Documented in evaluation-results.md. ---
 LATENCIES = {
@@ -59,142 +64,8 @@ def load_scenarios(path: str = "chaos-testing/scenarios.yaml") -> dict[str, dict
     return {s["id"]: s for s in data.get("scenarios", [])}
 
 
-# --- Mock Kubernetes client -------------------------------------------------
-
-def _failing_container_status():
-    return types.SimpleNamespace(
-        state=types.SimpleNamespace(
-            waiting=types.SimpleNamespace(reason="CrashLoopBackOff"),
-            terminated=None,
-        )
-    )
-
-
-class _CoreV1:
-    def __init__(self, cluster):
-        self._cluster = cluster
-
-    def read_namespaced_pod(self, name, namespace):
-        if self._cluster._fixed():
-            return types.SimpleNamespace(
-                status=types.SimpleNamespace(phase="Running", container_statuses=[])
-            )
-        return types.SimpleNamespace(
-            status=types.SimpleNamespace(
-                phase="Running",
-                container_statuses=[_failing_container_status()],
-            )
-        )
-
-    def delete_namespaced_pod(self, name, namespace):
-        # restart_pod and delete_pod share this API call; both reset the pod,
-        # so the simulator records restart_pod (delete_pod is never a ground
-        # truth action in the scenario set).
-        self._cluster._apply("restart_pod", name)
-        return types.SimpleNamespace(metadata=types.SimpleNamespace(name=name))
-
-    def patch_node(self, name, body):
-        self._cluster._apply("cordon_node", name)
-        return types.SimpleNamespace(metadata=types.SimpleNamespace(name=name))
-
-    def list_namespaced_event(self, namespace):
-        return types.SimpleNamespace(items=[])
-
-
-class _AppsV1:
-    def __init__(self, cluster):
-        self._cluster = cluster
-
-    def read_namespaced_deployment(self, name, namespace):
-        fixed = self._cluster._fixed()
-        return types.SimpleNamespace(
-            metadata=types.SimpleNamespace(
-                annotations={"deployment.kubernetes.io/revision": "2"}
-            ),
-            spec=types.SimpleNamespace(
-                template=types.SimpleNamespace(
-                    spec=types.SimpleNamespace(
-                        containers=[types.SimpleNamespace(name="app", image="sock-shop/app:bad")]
-                    )
-                )
-            ),
-            status=types.SimpleNamespace(
-                replicas=3, available_replicas=3 if fixed else 0
-            ),
-        )
-
-    def list_namespaced_replica_set(self, namespace):
-        return types.SimpleNamespace(
-            items=[
-                types.SimpleNamespace(
-                    metadata=types.SimpleNamespace(
-                        annotations={"deployment.kubernetes.io/revision": "1"},
-                        creation_timestamp=None,
-                    ),
-                    spec=types.SimpleNamespace(
-                        template=types.SimpleNamespace(
-                            spec=types.SimpleNamespace(
-                                containers=[types.SimpleNamespace(image="sock-shop/app:good")]
-                            )
-                        )
-                    ),
-                )
-            ]
-        )
-
-    def patch_namespaced_deployment(self, name, namespace, body):
-        self._cluster._apply("rollback_deployment", name)
-        return types.SimpleNamespace(metadata=types.SimpleNamespace(name=name))
-
-    def patch_namespaced_deployment_scale(self, name, namespace, body):
-        self._cluster._apply("scale_deployment", name)
-        return types.SimpleNamespace(metadata=types.SimpleNamespace(name=name))
-
-
-class MockCluster:
-    """Scenario-aware fake of ``app.k8s.client.k8s_client``.
-
-    Health follows the ground truth: once any ``expected_actions`` has been
-    applied, the cluster reads as healthy and validation passes.
-    """
-
-    def __init__(self, scenario: dict):
-        self.scenario = scenario
-        self.applied: list[dict[str, Any]] = []
-        self.core_v1 = _CoreV1(self)
-        self.apps_v1 = _AppsV1(self)
-
-    def _apply(self, action_type: str, target: str):
-        self.applied.append({"action_type": action_type, "target": target})
-
-    def _fixed(self) -> bool:
-        applied_types = {a["action_type"] for a in self.applied}
-        return bool(applied_types & set(self.scenario.get("expected_actions", [])))
-
-    def get_pod_logs(self, name, namespace="default", tail_lines=100):
-        return self.scenario.get("logs", "")
-
-    def get_previous_pod_logs(self, name, namespace="default", tail_lines=100):
-        return None
-
-    def get_pods(self, namespace="default"):
-        return types.SimpleNamespace(items=[])
-
-    def get_deployments(self, namespace="default"):
-        return types.SimpleNamespace(items=[])
-
-
-def install_mock(cluster: MockCluster):
-    """Swap the k8s client binding in every module that imported it."""
-    import app.k8s.actions as actions_mod
-    import app.k8s.client as client_mod
-    from app.agents import investigation as inv_mod
-    from app.agents import validation as val_mod
-
-    client_mod.k8s_client = cluster
-    inv_mod.k8s_client = cluster
-    val_mod.k8s_client = cluster
-    actions_mod.k8s_client = cluster
+# MockCluster + install_mock now live in backend/tests/mock_cluster.py and are
+# imported above, so the pytest suite and this harness share one cluster double.
 
 
 # --- State construction ------------------------------------------------------
@@ -247,22 +118,6 @@ def set_config(name: str):
     for field in ("disable_rag", "disable_validation", "disable_safety",
                   "disable_planning", "disable_bandit"):
         setattr(ablation, field, bool(switches.get(field, False)))
-
-
-def _force_fallback_llm():
-    from app.agents import root_cause
-
-    def _raise(_state):
-        raise RuntimeError("offline eval uses deterministic fallback")
-    root_cause._diagnose_with_llm = _raise
-
-
-def _fast_validation():
-    """The mock cluster is deterministic, so the 120s health poll is pointless."""
-    from app.agents import validation as val_mod
-
-    val_mod.HEALTH_POLL_TIMEOUT = 0.0
-    val_mod.HEALTH_POLL_INTERVAL = 0.0
 
 
 # --- Run engine --------------------------------------------------------------
