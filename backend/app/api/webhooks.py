@@ -161,6 +161,10 @@ async def _persist_results(incident_id: int, state: dict[str, Any], labels: dict
         selected = state.get("selected_action") or {}
         if state.get("remediation_success") and selected.get("action_type"):
             detected_at = incident.detected_at or now
+            # Some drivers (and SQLite in tests) return naive datetimes even
+            # for tz-aware columns; normalise before subtracting.
+            if detected_at.tzinfo is None:
+                detected_at = detected_at.replace(tzinfo=UTC)
             session.add(
                 Remediation(
                     incident_id=incident_id,

@@ -30,8 +30,43 @@ jobs:
           pip install ruff
       - name: Lint with ruff
         run: ruff check .
-      - name: Run tests
+      - name: Run tests (coverage gate)
         run: python -m pytest -q
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            test-reports/coverage.xml
+            test-reports/backend-tests.csv
+          if-no-files-found: ignore
+
+  eval:
+    name: Chaos evaluation (offline gates)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run offline evaluation with quality gates
+        run: |
+          python ../chaos-testing/run_experiments.py --offline --n 2 --gate \
+            --results "$RUNNER_TEMP/chaos-results"
+      - name: Ablation summary (gates)
+        run: |
+          python ../chaos-testing/ablation.py --check \
+            --results "$RUNNER_TEMP/chaos-results"
 
   frontend:
     name: Frontend (lint + typecheck + build)

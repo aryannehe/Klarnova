@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     
     # K8s
     KUBE_IN_CLUSTER: bool = False
+
+    # Remediation health validation (post-action cluster re-check)
+    REMEDIATION_HEALTH_TIMEOUT: float = 120.0
+    REMEDIATION_HEALTH_INTERVAL: float = 5.0
     
     # Observability
     PROMETHEUS_URL: str = "http://localhost:9090"

@@ -357,18 +357,41 @@ See [cli/README.md](cli/README.md).
 ## Testing & CI
 
 ```powershell
-# Backend
-cd backend && .\.venv\Scripts\pytest          # test suite
+# Backend — unit + API integration tests with a coverage gate (>= 75%)
+cd backend && .\.venv\Scripts\pytest
 cd backend && .\.venv\Scripts\ruff check .    # lint
+
+# Chaos evaluation (offline) with quality gates (exit 1 on regression)
+cd chaos-testing && ..\backend\.venv\Scripts\python run_experiments.py --offline --n 2 --gate
+cd chaos-testing && ..\backend\.venv\Scripts\python ablation.py --check
 
 # Frontend
 cd frontend
 npm run lint
 npx next typegen && npx tsc --noEmit
 npm run build
+
+# End-to-end (Playwright) — requires a running minikube + sock-shop
+bash scripts/e2e-setup.sh        # checks prereqs, installs deps + browser
+cd frontend && npm run e2e
+
+# Merge every layer's results into one CSV for analysis
+.\backend\.venv\Scripts\python scripts\collect-results.py
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs backend lint + tests and frontend lint + typecheck + build on every push/PR.
+The backend suite writes `test-reports/backend-tests.csv` and
+`test-reports/coverage.xml` (pytest enforces `--cov-fail-under=75`). The
+Playwright reporter writes `test-reports/e2e-results.csv`, and
+`scripts/collect-results.py` merges all layers into `test-reports/all-tests.csv`
+and snapshots the latest evaluation to `test-reports/latest/chaos-eval.csv`
+(the only generated report that is committed).
+
+GitHub Actions:
+- `.github/workflows/ci.yml` — backend ruff + pytest (with coverage gate) +
+  chaos evaluation gates, and frontend lint + typecheck + build, on every
+  push/PR.
+- `.github/workflows/e2e.yml` — the Playwright dashboard suite against a
+  minikube cluster, on demand, nightly, and on pushes to `main`/`aryan-test-1`.
 
 ---
 
@@ -379,6 +402,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs backend lint + tests and fronte
 - **Offline eval** (`offline.py`) replays curated incident scenarios against the agent pipeline with fixed seeds.
 - **Component ablation** (`ablation.py`) measures the contribution of each agent to resolution quality.
 - **Scenarios** are defined in `scenarios.yaml` (e.g., crash-looping, image-pull failures, probe failures).
+- **Quality gates** — `run_experiments.py --gate` and `ablation.py --check` fail CI when the `full` config
+  drops below the success-rate / diagnosis-accuracy thresholds, so regressions can't slip through silently.
 - Results and methodology are tracked in [docs/evaluation.md](docs/evaluation.md) and [docs/evaluation-results.md](docs/evaluation-results.md).
 
 ---
